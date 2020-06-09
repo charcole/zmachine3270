@@ -1,0 +1,2 @@
+cat webpage.html | sed 's/%/%%/g' | sed 's/"/\\"/g'| sed 's/\$/%/g' | tr -d '\n' | awk '// {print "#define WEBPAGE_STRING \"",$0,"\"\n"; }' > main/webpage.h
+
