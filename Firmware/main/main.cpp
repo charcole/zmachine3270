@@ -34,6 +34,18 @@ extern "C"
 
 #define STORAGE_NAMESPACE "settingsns"
 
+#define OUT_SDLCDATA  			(GPIO_NUM_13)
+#define RMT_SDLCDATA_CHANNEL    RMT_CHANNEL_1
+#define RMT_SEND_BUFFER_SIZE	256	// About 64 bytes of SDLC data
+
+// These factors both divide 80MHz ABD clock down to 9600 baud
+#define RMT_SDLC_DIVISOR		13
+#define RMT_SDLC_BAUD_RATE		641
+
+rmt_item32_t RMTSendBuffer[RMT_SEND_BUFFER_SIZE];
+
+static const char *LogTag = "informer";
+
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
 
@@ -103,6 +115,217 @@ static esp_err_t SaveSettings(void)
 	}
 
 	return err;
+}
+
+class CBitStream
+{
+	public:
+		CBitStream()
+		{
+			Reset();
+		}
+
+		CBitStream(const uint8_t* Data, int NumBytes)
+		{
+			memcpy(Bytes, Data, NumBytes);
+			TotalBits = 8 * NumBytes;
+			CurrentByte = NumBytes;
+			CurrentMask = 1;
+		}
+
+		void Reset()
+		{
+			TotalBits = 0;
+			CurrentByte = 0;
+			CurrentMask = 1;
+			Bytes[CurrentByte] = 0;
+		}
+
+		void Flush()
+		{
+			// Ready for reading
+			CurrentByte = 0;
+			CurrentMask = 1;
+		}
+
+		bool Finished() const
+		{
+			return TotalBits == 0;
+		}
+
+		bool ReadBit()
+		{
+			bool bBit = ((Bytes[CurrentByte] & CurrentMask) != 0);
+			TotalBits--;
+			if (CurrentMask == 0x80)
+			{
+				CurrentMask = 1;
+				CurrentByte++;
+			}
+			else
+			{
+				CurrentMask <<= 1;
+			}
+			return bBit;
+		}
+
+		void WriteBit(bool bBit)
+		{
+			if (bBit)
+			{
+				Bytes[CurrentByte] |= CurrentMask;
+			}
+			TotalBits++;
+			if (CurrentMask == 0x80)
+			{
+				CurrentMask = 1;
+				CurrentByte++;
+				Bytes[CurrentByte] = 0;
+			}
+			else
+			{
+				CurrentMask <<= 1;
+			}
+		}
+
+		const uint8_t* ToBytes(int& NumBytes)
+		{
+			NumBytes = ((TotalBits + 7) >> 3);
+			return Bytes;
+		}
+
+	private:
+		enum
+		{
+			MAX_MESSAGE_LENGTH = 64
+		};
+
+		int32_t TotalBits;
+		int32_t CurrentByte;
+		uint8_t CurrentMask;
+		uint8_t Bytes[MAX_MESSAGE_LENGTH];
+};
+
+void CalculateCRC(CBitStream& Dest, CBitStream& Source)
+{
+	uint16_t CRC = 0xFFFF;
+
+	Dest.Reset();
+	while (!Source.Finished())
+	{
+		uint16_t bData = (Source.ReadBit() ? 1: 0);
+		uint16_t bLastBit = (CRC >> 15);
+		uint16_t bDataBit = (bData ^ bLastBit);
+		CRC = bDataBit + (CRC << 1);
+		if (bDataBit)
+		{
+			CRC ^= (1<<5) + (1<<12);
+		};
+		Dest.WriteBit(bData);
+	}
+	for (int BitIndex = 0; BitIndex < 16; BitIndex++)
+	{
+		Dest.WriteBit(!(CRC >> 15));
+		CRC <<= 1;
+	}
+	Dest.Flush();
+}
+
+void InsertFlags(CBitStream& Dest)
+{
+	Dest.WriteBit(0);
+	Dest.WriteBit(1);
+	Dest.WriteBit(1);
+	Dest.WriteBit(1);
+	Dest.WriteBit(1);
+	Dest.WriteBit(1);
+	Dest.WriteBit(1);
+	Dest.WriteBit(0);
+}
+
+void ZeroBitAndFlagInsertion(CBitStream& Dest, CBitStream& Source)
+{
+	uint8_t NumBits = 0;
+
+	Dest.Reset();
+	InsertFlags(Dest);
+	while (!Source.Finished())
+	{
+		bool bData = Source.ReadBit();
+		Dest.WriteBit(bData);
+		if (bData)
+		{
+			NumBits++;
+			if (NumBits == 5)
+			{
+				Dest.WriteBit(0);
+				NumBits = 0;
+			}
+		}
+		else
+		{
+			NumBits = 0;
+		}
+	}
+	InsertFlags(Dest);
+	Dest.Flush();
+}
+
+void SendMessage(const uint8_t* Bytes, int NumBytes, int BaudRate)
+{
+	ESP_LOGI(LogTag, "Sending %d bytes with %d cycle spacing", NumBytes, BaudRate);
+
+	CBitStream A(Bytes, NumBytes);
+	CBitStream B;
+
+	A.Flush();
+
+	CalculateCRC(B, A);
+	ZeroBitAndFlagInsertion(A, B);
+
+	int NumBytesToSend = 0;
+	const uint8_t* BytesToSend = A.ToBytes(NumBytesToSend);
+	
+	if (NumBytesToSend == 0)
+	{
+		return;
+	}
+	
+	while (rmt_wait_tx_done(RMT_SDLCDATA_CHANNEL, 1) != ESP_OK)
+	{
+	}
+	
+	rmt_item32_t Baud;
+	Baud.level0 = 0;
+	Baud.duration0 = BaudRate;
+	Baud.level1 = 0;
+	Baud.duration1 = BaudRate;
+
+	rmt_item32_t CrumbTable[4];
+	CrumbTable[0] = Baud;
+	CrumbTable[1] = Baud;
+	CrumbTable[1].level0 = 1;
+	CrumbTable[2] = Baud;
+	CrumbTable[2].level1 = 1;
+	CrumbTable[3] = Baud;
+	CrumbTable[3].level0 = 1;
+	CrumbTable[3].level1 = 1;
+
+	rmt_item32_t *ToSend = RMTSendBuffer;
+	int LeftToSend = NumBytesToSend;
+	while (LeftToSend--)
+	{
+		uint8_t Byte = *(BytesToSend++);
+		*(ToSend++) = CrumbTable[Byte&3];
+		Byte>>=2;
+		*(ToSend++) = CrumbTable[Byte&3];
+		Byte>>=2;
+		*(ToSend++) = CrumbTable[Byte&3];
+		Byte>>=2;
+		*(ToSend++) = CrumbTable[Byte&3];
+	}
+	
+	rmt_write_items(RMT_SDLCDATA_CHANNEL, RMTSendBuffer, NumBytesToSend * 4, false);
 }
 
 void WifiStartListening(void *pvParameters)
@@ -288,6 +511,8 @@ void WifiStartListening(void *pvParameters)
 
 void CPU0Task(void *pvParameters)
 {
+	ESP_LOGI(LogTag, "CPU0Task started\n");
+
 	bDoneQuitTask1 = true;
 
 	while (true)
@@ -296,8 +521,51 @@ void CPU0Task(void *pvParameters)
 	}
 }
 
+void InitializeRMT()
+{
+	rmt_config_t RMTTxConfig;
+	RMTTxConfig.channel = RMT_SDLCDATA_CHANNEL;
+	RMTTxConfig.gpio_num = OUT_SDLCDATA;
+	RMTTxConfig.mem_block_num = 4;              // 256 uint32s / 64 SDLC bytes (will need to stream data)
+	RMTTxConfig.clk_div = RMT_SDLC_DIVISOR;
+	RMTTxConfig.tx_config.loop_en = false;
+	RMTTxConfig.tx_config.carrier_duty_percent = 50;
+	RMTTxConfig.tx_config.carrier_freq_hz = 38000;
+	RMTTxConfig.tx_config.carrier_level = RMT_CARRIER_LEVEL_HIGH;
+	RMTTxConfig.tx_config.carrier_en = false;
+	RMTTxConfig.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+	RMTTxConfig.tx_config.idle_output_en = true;
+	RMTTxConfig.rmt_mode = RMT_MODE_TX;
+	rmt_config(&RMTTxConfig);
+	rmt_driver_install(RMTTxConfig.channel, 0, 0);
+}
+
 void CPU1Task(void *pvParameters)
 {
+	ESP_LOGI(LogTag, "CPU1Task started\n");
+
+	InitializeRMT();
+
+	uint8_t Msg[] = { 0x40, 0x93 };
+
+	while (!bQuitTasks)
+	{
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE / 2); // 19200 baud
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE); // 9600
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 2); // 4800
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 4); // 2400
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 8); // 1200
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 16); // 600
+		vTaskDelay(2000);
+		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 32); // 300
+		vTaskDelay(2000);
+	}
+	
 	bDoneQuitTask2 = true;
 
 	while (true)
@@ -308,25 +576,6 @@ void CPU1Task(void *pvParameters)
 
 void InitializeGPIO()
 {
-#if 0
-	gpio_config_t GPIOConfig;
-	GPIOConfig.intr_type = GPIO_INTR_DISABLE;
-	GPIOConfig.pin_bit_mask = BIT(OUT_ENABLE);
-	GPIOConfig.mode = GPIO_MODE_OUTPUT;
-	GPIOConfig.pull_up_en = GPIO_PULLUP_DISABLE;
-	GPIOConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
-	gpio_config(&GPIOConfig);
-	gpio_set_level(OUT_ENABLE, 1);
-
-	GPIOConfig.pin_bit_mask = BIT(OUT_LATCH);
-	gpio_config(&GPIOConfig);
-	
-	GPIOConfig.pin_bit_mask = BIT(OUT_DATA);
-	gpio_config(&GPIOConfig);
-	
-	GPIOConfig.pin_bit_mask = BIT(OUT_CLOCK);
-	gpio_config(&GPIOConfig);
-#endif
 }
 
 /* The event group allows multiple bits for each event,
@@ -416,7 +665,7 @@ extern "C" void app_main(void)
 	xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 	printf("Connected\n\n");
 
-	xTaskCreatePinnedToCore(&CPU0Task, "CPU0Task", 8192, NULL, 5, NULL, 0);
-	xTaskCreatePinnedToCore(&WifiStartListening, "WifiConfig", 8192, NULL, 4, NULL, 0);
 	xTaskCreatePinnedToCore(&CPU1Task, "CPU1Task", 8192, NULL, 5, NULL, 1);
+	xTaskCreatePinnedToCore(&CPU0Task, "CPU0Task", 8192, NULL, 5, NULL, 0);
+	xTaskCreatePinnedToCore(&WifiStartListening, "WifiConfig", 8192, NULL, 5, NULL, 0);
 }
