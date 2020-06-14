@@ -11,6 +11,7 @@ extern "C"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/rmt.h"
+#include "driver/spi_slave.h"
 #include "driver/timer.h"
 #include "driver/ledc.h"
 #include "nvs_flash.h"
@@ -35,6 +36,11 @@ extern "C"
 #define STORAGE_NAMESPACE "settingsns"
 
 #define OUT_SDLCDATA  			(GPIO_NUM_13)
+#define OUT_SDLCCLOCK			(GPIO_NUM_12)
+#define IN_SDLCCLOCK			(GPIO_NUM_14)
+#define IN_SDLCREADY			(GPIO_NUM_27)
+#define IN_SDLCRECV				(GPIO_NUM_26)
+
 #define RMT_SDLCDATA_CHANNEL    RMT_CHANNEL_1
 #define RMT_SEND_BUFFER_SIZE	256	// About 64 bytes of SDLC data
 
@@ -188,9 +194,9 @@ class CBitStream
 			}
 		}
 
-		const uint8_t* ToBytes(int& NumBytes)
+		const uint8_t* ToBytes(int& NumBits)
 		{
-			NumBytes = ((TotalBits + 7) >> 3);
+			NumBits = TotalBits;
 			return Bytes;
 		}
 
@@ -291,6 +297,7 @@ void SendMessage(const uint8_t* Bytes, int NumBytes, int BaudRate)
 		return;
 	}
 	
+	#if 0
 	while (rmt_wait_tx_done(RMT_SDLCDATA_CHANNEL, 1) != ESP_OK)
 	{
 	}
@@ -326,6 +333,13 @@ void SendMessage(const uint8_t* Bytes, int NumBytes, int BaudRate)
 	}
 	
 	rmt_write_items(RMT_SDLCDATA_CHANNEL, RMTSendBuffer, NumBytesToSend * 4, false);
+	#else
+	spi_slave_transaction_t slave_t = {};
+	slave_t.length = 8 * NumBytesToSend;
+	slave_t.tx_buffer = BytesToSend;
+	slave_t.rx_buffer = nullptr;
+	spi_slave_transmit(HSPI_HOST, &slave_t, portMAX_DELAY);
+	#endif
 }
 
 void WifiStartListening(void *pvParameters)
@@ -462,8 +476,8 @@ void WifiStartListening(void *pvParameters)
 
 					bool bSuccess = (ErrorCode == ESP_OK && Length == 0 && !bWaitingForStart);
 
-					const char* UpdatedResponse = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><title>Clock Firmware Update</title><style>*{box-sizing: border-box;}body{margin: 0;}#main{display: flex; min-height: calc(100vh - 40vh);}#main > article{flex: 1;}#main > nav, #main > aside{flex: 0 0 20vw;}#main > nav{order: -1;}header, footer, article, nav, aside{padding: 1em;}header, footer{height: 20vh;}</style><body> <header> <center><h1>Clock Firmware Update</h1></center> </header> <div id=\"main\"> <nav></nav> <article><p>Firmware update successful. Rebooting...</p></article> <aside></aside> </div></body>";
-					const char* NotUpdatedResponse = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><title>Clock Firmware Update</title><style>*{box-sizing: border-box;}body{margin: 0;}#main{display: flex; min-height: calc(100vh - 40vh);}#main > article{flex: 1;}#main > nav, #main > aside{flex: 0 0 20vw;}#main > nav{order: -1;}header, footer, article, nav, aside{padding: 1em;}header, footer{height: 20vh;}</style><body> <header> <center><h1>Clock Firmware Update</h1></center> </header> <div id=\"main\"> <nav></nav> <article><p>Update failed.</p></article> <aside></aside> </div></body>";
+					const char* UpdatedResponse = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><title>Firmware Update</title><style>*{box-sizing: border-box;}body{margin: 0;}#main{display: flex; min-height: calc(100vh - 40vh);}#main > article{flex: 1;}#main > nav, #main > aside{flex: 0 0 20vw;}#main > nav{order: -1;}header, footer, article, nav, aside{padding: 1em;}header, footer{height: 20vh;}</style><body> <header> <center><h1>Firmware Update</h1></center> </header> <div id=\"main\"> <nav></nav> <article><p>Firmware update successful. Rebooting...</p></article> <aside></aside> </div></body>";
+					const char* NotUpdatedResponse = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html><title>Firmware Update</title><style>*{box-sizing: border-box;}body{margin: 0;}#main{display: flex; min-height: calc(100vh - 40vh);}#main > article{flex: 1;}#main > nav, #main > aside{flex: 0 0 20vw;}#main > nav{order: -1;}header, footer, article, nav, aside{padding: 1em;}header, footer{height: 20vh;}</style><body> <header> <center><h1>Firmware Update</h1></center> </header> <div id=\"main\"> <nav></nav> <article><p>Update failed.</p></article> <aside></aside> </div></body>";
 					const char* Response = bSuccess ? UpdatedResponse : NotUpdatedResponse;
 
 					send(ClientSock, Response, strlen(Response), 0);
@@ -521,49 +535,75 @@ void CPU0Task(void *pvParameters)
 	}
 }
 
-void InitializeRMT()
+void InitializeClock()
 {
-	rmt_config_t RMTTxConfig;
-	RMTTxConfig.channel = RMT_SDLCDATA_CHANNEL;
-	RMTTxConfig.gpio_num = OUT_SDLCDATA;
-	RMTTxConfig.mem_block_num = 4;              // 256 uint32s / 64 SDLC bytes (will need to stream data)
-	RMTTxConfig.clk_div = RMT_SDLC_DIVISOR;
-	RMTTxConfig.tx_config.loop_en = false;
-	RMTTxConfig.tx_config.carrier_duty_percent = 50;
-	RMTTxConfig.tx_config.carrier_freq_hz = 38000;
-	RMTTxConfig.tx_config.carrier_level = RMT_CARRIER_LEVEL_HIGH;
-	RMTTxConfig.tx_config.carrier_en = false;
-	RMTTxConfig.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
-	RMTTxConfig.tx_config.idle_output_en = true;
-	RMTTxConfig.rmt_mode = RMT_MODE_TX;
-	rmt_config(&RMTTxConfig);
-	rmt_driver_install(RMTTxConfig.channel, 0, 0);
+	ledc_channel_config_t ledc_ch_config = {};
+	ledc_ch_config.channel  = LEDC_CHANNEL_0;
+	ledc_ch_config.duty = 2;
+	ledc_ch_config.gpio_num = OUT_SDLCCLOCK;
+	ledc_ch_config.speed_mode = LEDC_HIGH_SPEED_MODE;
+	ledc_ch_config.timer_sel = LEDC_TIMER_0;
+
+	ledc_timer_config_t ledc_time_config = {};
+	ledc_time_config.duty_resolution = LEDC_TIMER_2_BIT;
+	ledc_time_config.freq_hz = 4800;
+	ledc_time_config.speed_mode = LEDC_HIGH_SPEED_MODE;
+	ledc_time_config.timer_num = LEDC_TIMER_0;
+    
+	ledc_timer_config(&ledc_time_config);
+    ledc_channel_config(&ledc_ch_config);
+}
+
+void InitializeSPI()
+{
+	spi_bus_config_t buscfg = {};
+	buscfg.mosi_io_num = IN_SDLCRECV;
+	buscfg.miso_io_num = OUT_SDLCDATA;
+	buscfg.sclk_io_num = IN_SDLCCLOCK;
+
+	spi_slave_interface_config_t slvcfg = {};
+	slvcfg.mode = 0; // TODO: Might be 1. Seems to work either way
+	slvcfg.spics_io_num = IN_SDLCREADY;
+	slvcfg.queue_size = 3;
+	slvcfg.flags = SPI_SLAVE_BIT_LSBFIRST;
+
+	//Enable pull-ups on SPI lines so we don't detect rogue pulses when no master is connected.
+	gpio_set_pull_mode(IN_SDLCRECV, GPIO_PULLUP_ONLY);
+	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
+	gpio_set_pull_mode(IN_SDLCREADY, GPIO_PULLDOWN_ONLY);
+
+	//Initialize SPI slave interface
+	spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, 2);
 }
 
 void CPU1Task(void *pvParameters)
 {
 	ESP_LOGI(LogTag, "CPU1Task started\n");
 
-	InitializeRMT();
+	InitializeClock();
+	InitializeSPI();
 
 	uint8_t Msg[] = { 0x40, 0x93 };
 
+	CBitStream A(Msg, sizeof(Msg));
+	CBitStream B;
+
+	A.Flush();
+
+	CalculateCRC(B, A);
+	ZeroBitAndFlagInsertion(A, B);
+
+	int NumBitsToSend = 0;
+	const uint8_t* BytesToSend = A.ToBytes(NumBitsToSend);
+		
+	spi_slave_transaction_t slave_t = {};
+	slave_t.length = NumBitsToSend;
+	slave_t.tx_buffer = BytesToSend;
+	slave_t.rx_buffer = nullptr;
+
 	while (!bQuitTasks)
 	{
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE / 2); // 19200 baud
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE); // 9600
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 2); // 4800
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 4); // 2400
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 8); // 1200
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 16); // 600
-		vTaskDelay(2000);
-		SendMessage(Msg, sizeof(Msg), RMT_SDLC_BAUD_RATE * 32); // 300
-		vTaskDelay(2000);
+		spi_slave_transmit(HSPI_HOST, &slave_t, portMAX_DELAY);
 	}
 	
 	bDoneQuitTask2 = true;
