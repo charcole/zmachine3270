@@ -40,20 +40,21 @@ extern "C"
 #define IN_SDLCCLOCK			(GPIO_NUM_14)
 #define IN_SDLCREADY			(GPIO_NUM_27)
 #define IN_SDLCRECV				(GPIO_NUM_26)
-
-#define RMT_SDLCDATA_CHANNEL    RMT_CHANNEL_1
-#define RMT_SEND_BUFFER_SIZE	256	// About 64 bytes of SDLC data
-
-// These factors both divide 80MHz ABD clock down to 9600 baud
-#define RMT_SDLC_DIVISOR		13
-#define RMT_SDLC_BAUD_RATE		641
-
-rmt_item32_t RMTSendBuffer[RMT_SEND_BUFFER_SIZE];
+#define IN_SDLCRECV2			(GPIO_NUM_25)
 
 static const char *LogTag = "informer";
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
+
+struct PacketToSend
+{
+	uint32_t NumBits;
+	const uint8_t* Data;
+};
+
+static xQueueHandle SendEventQueue = nullptr;
+static TaskHandle_t RecvTask = nullptr;
 
 struct Configuration
 {
@@ -277,71 +278,6 @@ void ZeroBitAndFlagInsertion(CBitStream& Dest, CBitStream& Source)
 	Dest.Flush();
 }
 
-void SendMessage(const uint8_t* Bytes, int NumBytes, int BaudRate)
-{
-	ESP_LOGI(LogTag, "Sending %d bytes with %d cycle spacing", NumBytes, BaudRate);
-
-	CBitStream A(Bytes, NumBytes);
-	CBitStream B;
-
-	A.Flush();
-
-	CalculateCRC(B, A);
-	ZeroBitAndFlagInsertion(A, B);
-
-	int NumBytesToSend = 0;
-	const uint8_t* BytesToSend = A.ToBytes(NumBytesToSend);
-	
-	if (NumBytesToSend == 0)
-	{
-		return;
-	}
-	
-	#if 0
-	while (rmt_wait_tx_done(RMT_SDLCDATA_CHANNEL, 1) != ESP_OK)
-	{
-	}
-	
-	rmt_item32_t Baud;
-	Baud.level0 = 0;
-	Baud.duration0 = BaudRate;
-	Baud.level1 = 0;
-	Baud.duration1 = BaudRate;
-
-	rmt_item32_t CrumbTable[4];
-	CrumbTable[0] = Baud;
-	CrumbTable[1] = Baud;
-	CrumbTable[1].level0 = 1;
-	CrumbTable[2] = Baud;
-	CrumbTable[2].level1 = 1;
-	CrumbTable[3] = Baud;
-	CrumbTable[3].level0 = 1;
-	CrumbTable[3].level1 = 1;
-
-	rmt_item32_t *ToSend = RMTSendBuffer;
-	int LeftToSend = NumBytesToSend;
-	while (LeftToSend--)
-	{
-		uint8_t Byte = *(BytesToSend++);
-		*(ToSend++) = CrumbTable[Byte&3];
-		Byte>>=2;
-		*(ToSend++) = CrumbTable[Byte&3];
-		Byte>>=2;
-		*(ToSend++) = CrumbTable[Byte&3];
-		Byte>>=2;
-		*(ToSend++) = CrumbTable[Byte&3];
-	}
-	
-	rmt_write_items(RMT_SDLCDATA_CHANNEL, RMTSendBuffer, NumBytesToSend * 4, false);
-	#else
-	spi_slave_transaction_t slave_t = {};
-	slave_t.length = 8 * NumBytesToSend;
-	slave_t.tx_buffer = BytesToSend;
-	slave_t.rx_buffer = nullptr;
-	spi_slave_transmit(HSPI_HOST, &slave_t, portMAX_DELAY);
-	#endif
-}
-
 void WifiStartListening(void *pvParameters)
 {
 	static char WifiBuffer[2048];
@@ -523,9 +459,58 @@ void WifiStartListening(void *pvParameters)
 	esp_restart();
 }
 
+#define RING_BUF_SIZE	1024 // Should give almost 2 seconds buffering
+#define RING_BUF_MASK	(RING_BUF_SIZE-1)
+#define INVALID_PACKET	~0u
+
+uint8_t RingBuff[RING_BUF_SIZE];
+uint32_t RecvCurrentByte = 0;
+uint32_t RingBufIndex = 0;
+uint32_t RunCount = 0;
+uint32_t StartPacket = INVALID_PACKET;
+static xQueueHandle RecvEventQueue = NULL;
+
 void CPU0Task(void *pvParameters)
 {
 	ESP_LOGI(LogTag, "CPU0Task started\n");
+
+	uint8_t Msg[] = { 0x40, 0xBF };
+
+	CBitStream A(Msg, sizeof(Msg));
+	CBitStream B;
+
+	A.Flush();
+	CalculateCRC(B, A);
+	ZeroBitAndFlagInsertion(A, B);
+
+	int NumBitsToSend = 0;
+	const uint8_t* BytesToSend = A.ToBytes(NumBitsToSend);
+
+	while (!bQuitTasks)
+	{
+		printf("Sending packet\n");
+		// Queue our packet to be sent
+		PacketToSend SendPacket;
+		SendPacket.NumBits = NumBitsToSend;
+		SendPacket.Data = BytesToSend;
+		xQueueSend(SendEventQueue, &SendPacket, portMAX_DELAY);
+		// Wait until it's been sent
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		printf("Send done\n");
+
+		TickType_t WaitTime = 1000; // Start waiting for response, first long delay then anything else we might pick up
+		uint32_t Packet[2];
+		while (xQueueReceive(RecvEventQueue, Packet, WaitTime))
+		{
+			printf("Recieved packet %d to %d\n", Packet[0], Packet[1]);
+			while (Packet[0] < Packet[1])
+			{
+				printf("%02x\n", RingBuff[Packet[0] & RING_BUF_MASK]);
+				Packet[0]++;
+			}
+			WaitTime = 0;
+        }
+	}
 
 	bDoneQuitTask1 = true;
 
@@ -533,6 +518,69 @@ void CPU0Task(void *pvParameters)
 	{
 		vTaskDelay(100000);
 	}
+}
+
+IRAM_ATTR void RecvCallback(void* UserData)
+{
+	bool bBit = gpio_get_level(IN_SDLCRECV2);
+			
+	if (bBit)
+	{
+		RunCount++;
+	}
+	else
+	{
+		int RunLength = RunCount;
+		RunCount = 0;
+		
+		if (RunLength >= 5)
+		{
+			if (RunLength > 6) // Should never happen
+			{
+				StartPacket = INVALID_PACKET;
+			}
+			else if (RunLength == 6) // It's the flags!
+			{
+				uint32_t EndPacket = RingBufIndex;
+				if (StartPacket != INVALID_PACKET && StartPacket != EndPacket)
+				{
+					uint32_t Packet[2] = { StartPacket, EndPacket };
+					xQueueSendFromISR(RecvEventQueue, Packet, NULL);
+				}
+				StartPacket = RingBufIndex;
+				RecvCurrentByte = 0x80;
+			}
+			// If 5 then needs to be dropped
+			return;
+		}
+	}
+
+	bool bFlush = ((RecvCurrentByte & 1) != 0);
+	RecvCurrentByte >>= 1;
+	RecvCurrentByte |= (bBit ? 0x80 : 0);
+	if (bFlush)
+	{
+		RingBuff[(RingBufIndex++) & RING_BUF_MASK] = RecvCurrentByte;
+		RecvCurrentByte = 0x80;
+	}
+}
+
+void InitializeGPIO()
+{
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_INPUT;
+	io_conf.pin_bit_mask = BIT(IN_SDLCRECV2);
+	io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+	io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+	gpio_config(&io_conf);
+
+	gpio_install_isr_service(0);//ESP_INTR_FLAG_IRAM);
+	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
+
+	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
+	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_POSEDGE); // TODO: Might be negative edge (change with SPI mode)
+	gpio_intr_enable(IN_SDLCCLOCK);
 }
 
 void InitializeClock()
@@ -546,7 +594,7 @@ void InitializeClock()
 
 	ledc_timer_config_t ledc_time_config = {};
 	ledc_time_config.duty_resolution = LEDC_TIMER_2_BIT;
-	ledc_time_config.freq_hz = 4800;
+	ledc_time_config.freq_hz = 9600;
 	ledc_time_config.speed_mode = LEDC_HIGH_SPEED_MODE;
 	ledc_time_config.timer_num = LEDC_TIMER_0;
     
@@ -564,12 +612,11 @@ void InitializeSPI()
 	spi_slave_interface_config_t slvcfg = {};
 	slvcfg.mode = 0; // TODO: Might be 1. Seems to work either way
 	slvcfg.spics_io_num = IN_SDLCREADY;
-	slvcfg.queue_size = 3;
+	slvcfg.queue_size = 2; // Make sure we can have a flags transaction in flight at all times
 	slvcfg.flags = SPI_SLAVE_BIT_LSBFIRST;
 
-	//Enable pull-ups on SPI lines so we don't detect rogue pulses when no master is connected.
+	// Always ready to send (connection is half duplex)
 	gpio_set_pull_mode(IN_SDLCRECV, GPIO_PULLUP_ONLY);
-	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
 	gpio_set_pull_mode(IN_SDLCREADY, GPIO_PULLDOWN_ONLY);
 
 	//Initialize SPI slave interface
@@ -581,29 +628,45 @@ void CPU1Task(void *pvParameters)
 	ESP_LOGI(LogTag, "CPU1Task started\n");
 
 	InitializeClock();
-	InitializeSPI();
+	InitializeGPIO();
+	InitializeSPI();	
 
-	uint8_t Msg[] = { 0x40, 0x93 };
-
-	CBitStream A(Msg, sizeof(Msg));
-	CBitStream B;
-
-	A.Flush();
-
-	CalculateCRC(B, A);
-	ZeroBitAndFlagInsertion(A, B);
-
-	int NumBitsToSend = 0;
-	const uint8_t* BytesToSend = A.ToBytes(NumBitsToSend);
-		
-	spi_slave_transaction_t slave_t = {};
-	slave_t.length = NumBitsToSend;
-	slave_t.tx_buffer = BytesToSend;
-	slave_t.rx_buffer = nullptr;
+	uint8_t Flags[32]; // Needs to fill at least 1ms. 32 bytes is about 50ms at 4800 baud
+	memset(Flags, 0x7E, sizeof(Flags));
+			
+	spi_slave_transaction_t FlagsTransaction = {};
+	FlagsTransaction.length = sizeof(Flags);
+	FlagsTransaction.tx_buffer = Flags;
+	FlagsTransaction.rx_buffer = nullptr;
 
 	while (!bQuitTasks)
 	{
-		spi_slave_transmit(HSPI_HOST, &slave_t, portMAX_DELAY);
+		PacketToSend Packet;
+		if (xQueueReceive(SendEventQueue, &Packet, 0))
+		{
+			spi_slave_transaction_t MsgTransaction = {};
+			MsgTransaction.length = Packet.NumBits;
+			MsgTransaction.tx_buffer = Packet.Data;
+			MsgTransaction.rx_buffer = nullptr;
+
+			spi_slave_queue_trans(HSPI_HOST, &MsgTransaction, portMAX_DELAY);
+			while (true)
+			{
+				spi_slave_queue_trans(HSPI_HOST, &FlagsTransaction, portMAX_DELAY);
+
+				spi_slave_transaction_t* RecievedTransaction = nullptr;
+				spi_slave_get_trans_result(HSPI_HOST, &RecievedTransaction, 0);
+				if (RecievedTransaction == &MsgTransaction)
+				{
+					xTaskNotifyGive(RecvTask);
+					break;
+				}
+			}
+		}
+		else
+		{
+			spi_slave_queue_trans(HSPI_HOST, &FlagsTransaction, portMAX_DELAY);			
+		}
 	}
 	
 	bDoneQuitTask2 = true;
@@ -612,10 +675,6 @@ void CPU1Task(void *pvParameters)
 	{
 		vTaskDelay(100000);
 	}
-}
-
-void InitializeGPIO()
-{
 }
 
 /* The event group allows multiple bits for each event,
@@ -682,8 +741,6 @@ void wifi_init_sta()
 
 extern "C" void app_main(void)
 {
-	InitializeGPIO();
-
 	//Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -705,7 +762,10 @@ extern "C" void app_main(void)
 	xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 	printf("Connected\n\n");
 
+	SendEventQueue = xQueueCreate(4, sizeof(PacketToSend));
+	RecvEventQueue = xQueueCreate(16, 2 * sizeof(uint32_t));
+
+	xTaskCreatePinnedToCore(&CPU0Task, "CPU0Task", 8192, NULL, 5, &RecvTask, 0);
 	xTaskCreatePinnedToCore(&CPU1Task, "CPU1Task", 8192, NULL, 5, NULL, 1);
-	xTaskCreatePinnedToCore(&CPU0Task, "CPU0Task", 8192, NULL, 5, NULL, 0);
 	xTaskCreatePinnedToCore(&WifiStartListening, "WifiConfig", 8192, NULL, 5, NULL, 0);
 }
