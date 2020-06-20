@@ -172,7 +172,7 @@ static int m_dictionaryTable;
 static byte *memory;
 static int m_numberstack[1024];
 static stack m_stack;
-static ZCallStack m_callstackcontents[1024];
+static ZCallStack m_callstackcontents[96];
 static stack m_callStack;
 
 int makeS16(int msb, int lsb)
