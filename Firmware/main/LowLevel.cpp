@@ -1,8 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "crc.h"
-#include "PacketParser.h"
-#include "PacketBuilder.h"
+#include "Network.h"
 extern "C"
 {
 #include "freertos/FreeRTOS.h"
@@ -13,10 +12,6 @@ extern "C"
 #include "driver/ledc.h"
 #include "esp_log.h"
 };
-
-extern volatile bool bQuitTasks;
-extern volatile bool bDoneQuitTask1;
-extern volatile bool bDoneQuitTask2;
 
 #define OUT_SDLCDATA  			(GPIO_NUM_13)
 #define OUT_SDLCCLOCK			(GPIO_NUM_12)
@@ -29,6 +24,10 @@ extern volatile bool bDoneQuitTask2;
 #define RING_BUF_MASK	(RING_BUF_SIZE-1)
 #define INVALID_PACKET	~0u
 
+extern volatile bool bQuitTasks;
+extern volatile bool bDoneQuitTask1;
+extern volatile bool bDoneQuitTask2;
+
 static xQueueHandle SendEventQueue = nullptr;
 static TaskHandle_t RecvTask = nullptr;
 static uint8_t RecvRingBuff[RING_BUF_SIZE];
@@ -38,6 +37,7 @@ static uint32_t RunCount = 0;
 static uint32_t StartPacket = INVALID_PACKET;
 static xQueueHandle RecvEventQueue = NULL;
 static const char *LogTag = "informer";
+static NetworkState Network;
 
 struct PacketToSend
 {
@@ -201,173 +201,6 @@ void ZeroBitAndFlagInsertion(CBitStream& Dest, CBitStream& Source)
 }
 
 // Messaging
-class NetworkState
-{
-	enum EState
-	{
-		StateXID,
-		StateNrm,
-		StateActPU,
-		StateActLU,
-		StateBind,
-		StateDataReset,
-		StateSendScreen,
-		StateWaitForInput,
-		StateRespond
-	};
-
-public:
-	NetworkState()
-	{
-		BuildTextTables();
-	}
-
-	int GenerateNewPackets(uint8_t* Buffer)
-	{
-		Stream.Reset();
-		if (bSendReadyToRecieve)
-		{
-			SDLCReadyToRecieve RR(Stream);
-			bSendReadyToRecieve = false;
-			return Stream.GetData(Buffer);
-		}
-		switch (State)
-		{
-			case StateXID:
-			{
-				SDLCRequestXID XID(Stream);
-				State = StateNrm;
-				break;
-			}
-			case StateNrm:
-			{
-				SDLCSetNormalResponseMode SetNrmRes(Stream);
-				State = StateActPU;
-				break;
-			}
-			case StateActPU:
-			{
-				Stream.SetSequence(0x1568);
-				{
-					RequestPacket ACTPU(Stream, 3, 0, 0, true);
-					ACTPU.SendData({0x11, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A});
-				}
-				bSendReadyToRecieve = true;
-				State = StateActLU;
-				break;
-			}
-			case StateActLU:
-			{
-				Stream.SetSequence(0x1569);
-				{
-					RequestPacket ACTLU(Stream, 3, 2, 0, true);
-					ACTLU.SendData({0x0D, 0x01, 0x01});
-				}
-				bSendReadyToRecieve = true;
-				State = StateBind;
-				break;
-			}
-			case StateBind:
-			{
-				Stream.SetSequence(0x0);
-				{
-					RequestPacket Bind(Stream, 3, 2, 1);
-					Bind.SendData({
-							0x31, 0x01, 0x03, 0x03, 0xA1, 0xA1, 0x30, 0x80, 0x00,
-							0x01, 0x85, 0x85, 0x0A, 0x00, 0x02, 0x11, 0x00, 0x00,
-							0xB1, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-							0x04, 0xD1, 0xE2, 0xC9, 0xD6, 0x00
-							});
-				}
-				bSendReadyToRecieve = true;
-				State = StateDataReset;
-				break;
-			}
-			case StateDataReset:
-			{
-				{
-					RequestPacket DataReset(Stream, 3, 2, 1);
-					DataReset.SendData(0xA0);
-				}
-				bSendReadyToRecieve = true;
-				State = StateSendScreen;
-				break;
-			}
-			case StateSendScreen:
-			{
-				{
-					RequestPacket DataStream3270(Stream, 0, 2, 1);
-					DataStream3270.SendData({0xF1, 0xD3, 0x11, 0x5C, 0xF0, 0x1D, 0xF0});
-					const char* Message = "You did it! ";
-					while (*Message)
-					{
-						DataStream3270.SendData(ASCIIToEBCDIC[(uint8_t)*Message++]);
-					}
-					DataStream3270.SendData({0x6E, 0x40, 0x1D, 0x40, 0x13, 0x11, 0x5D, 0x7F, 0x1D, 0xF0});
-				}
-				bSendReadyToRecieve = true;
-				State = StateWaitForInput;
-				break;
-			}
-			case StateWaitForInput:
-			{
-				SDLCReadyToRecieve RR(Stream);
-				break;
-			}
-			case StateRespond:
-			{
-				{
-					// TODO: ERI?
-					PositiveResponsePacket Response(Stream, 0, 2, 1, ProcessedPacket);
-					Response.SendData({0x7d, 0x5d, 0xc3, 0x11, 0x5d, 0xc2, 0xf4});
-				}
-				{
-					RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
-				}
-				bSendReadyToRecieve = true;
-				State = StateWaitForInput;
-				break;
-			}
-		}
-		return Stream.GetData(Buffer);
-	}
-
-	void ProcessPacket(const PacketParser& Packet, const uint8_t* Data)
-	{
-        if (!Packet.bPacketGood)
-        {
-            return;
-        }
-		if (Packet.bSDLCValid)
-		{
-			if (Packet.SDLC.bSendCountValid)
-			{
-				Stream.SetRecieveCount(Packet.SDLC.RecieveCount);
-			}
-		}
-		if (Packet.bRequestValid && Packet.Req.bChangeDirection)
-		{
-			if (Packet.FID2.Sequence != ProcessedPacket)
-			{
-				State = StateRespond;
-				if (Packet.bResponseValid || Packet.bRequestValid)
-				{
-					//Stream.SetSequence(Packet.FID2.Sequence + 1);
-					ProcessedPacket = Packet.FID2.Sequence;
-				}
-			}
-		}
-	}
-
-private:
-	EState State = StateXID;
-	SNAStream Stream;
-	uint16_t ProcessedPacket = 0xFFFF;
-	bool bSendReadyToRecieve = false;
-};
-
-NetworkState Network;
-
 void MessageTask(void *pvParameters)
 {
 	ESP_LOGI(LogTag, "MessageTask started\n");
@@ -609,6 +442,7 @@ void InitializeGPIO()
 void CreateSendRecieveTasks()
 {
 	BuildCRCLookup();
+	BuildTextTables();
 
     SendEventQueue = xQueueCreate(4, sizeof(PacketToSend));
 	RecvEventQueue = xQueueCreate(16, 2 * sizeof(uint32_t));
