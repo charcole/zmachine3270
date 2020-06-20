@@ -1,5 +1,9 @@
 {
     "files.associations": {
         "initializer_list": "cpp"
+    },
+    "files.exclude": {
+        "Firmware/build": true,
+        "**/*.bin": true
     }
 }
