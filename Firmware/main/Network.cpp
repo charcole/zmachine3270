@@ -126,6 +126,7 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
 {
     if (!Packet.bPacketGood)
     {
+        bSendReadyToRecieve = true;
         return;
     }
     if (Packet.bSDLCValid)
