@@ -4,27 +4,31 @@ NetworkState::NetworkState()
 {
 }
 
-int NetworkState::GenerateNewPackets(uint8_t *Buffer)
+int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
 {
     Stream.Reset();
     if (bSendReadyToRecieve)
     {
         SDLCReadyToRecieve RR(Stream);
         bSendReadyToRecieve = false;
+        bWaitForReply = true;
         return Stream.GetData(Buffer);
     }
+    bWaitForReply = false;
     switch (State)
     {
     case StateXID:
     {
         SDLCRequestXID XID(Stream);
         State = StateNrm;
+        bWaitForReply = true;
         break;
     }
     case StateNrm:
     {
         SDLCSetNormalResponseMode SetNrmRes(Stream);
         State = StateActPU;
+        bWaitForReply = true;
         break;
     }
     case StateActPU:
@@ -78,7 +82,7 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer)
         {
             RequestPacket DataStream3270(Stream, 0, 2, 1);
             DataStream3270.SendData({0xF1, 0xD3, 0x11, 0x5C, 0xF0, 0x1D, 0xF0});
-            const char *Message = "Talk to me > ";
+            const char *Message = "Talk to me";
             while (*Message)
             {
                 DataStream3270.SendData(ASCIIToEBCDIC[(uint8_t)*Message++]);
@@ -92,6 +96,7 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer)
     case StateWaitForInput:
     {
         SDLCReadyToRecieve RR(Stream);
+        bWaitForReply = true;
         break;
     }
     case StateRespond:

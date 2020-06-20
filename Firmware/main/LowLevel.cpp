@@ -208,12 +208,13 @@ void MessageTask(void *pvParameters)
 	while (!bQuitTasks)
 	{
 		uint8_t SendBuffer[128];
-		int SendSize = Network.GenerateNewPackets(SendBuffer);
+		bool bWaitForReply = false;
+		int SendSize = Network.GenerateNewPackets(SendBuffer, bWaitForReply);
 		
-		printf("Sending packet of size %d\n", SendSize);
+		printf("Sending packet of size %d:", SendSize);
 		for (int i=0; i<SendSize; i++)
 		{
-			printf("%02x ", SendBuffer[i]);
+			printf(" %02x", SendBuffer[i]);
 		}
 		printf("\n");
 
@@ -235,7 +236,7 @@ void MessageTask(void *pvParameters)
 		// Wait until it's been sent
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-		TickType_t WaitTime = 1000; // Start waiting for response, first long delay then anything else we might pick up
+		TickType_t WaitTime = (bWaitForReply ? 1000 : 0); // Start waiting for response, first long delay then anything else we might pick up
 		uint32_t Packet[2];
 		while (xQueueReceive(RecvEventQueue, Packet, WaitTime))
 		{

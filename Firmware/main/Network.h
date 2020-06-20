@@ -21,7 +21,7 @@ class NetworkState
 
 public:
 	NetworkState();
-	int GenerateNewPackets(uint8_t* Buffer);
+	int GenerateNewPackets(uint8_t* Buffer, bool &bWaitForReply);
 	void ProcessPacket(const PacketParser& Packet, const uint8_t* Data);
 
 private:
