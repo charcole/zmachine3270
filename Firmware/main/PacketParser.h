@@ -17,6 +17,7 @@ public:
     ParsedSenseData Sense;
     int StartOfData;
     int EndOfData;
+    bool bPacketGood;
     bool bSDLCValid;
     bool bFID2Valid;
     bool bRequestValid;

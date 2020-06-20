@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "PacketParser.h"
+#include "crc.h"
 
 PacketParser::PacketParser()
 {
@@ -10,6 +11,9 @@ PacketParser::PacketParser()
 
 void PacketParser::Parse(const uint8_t *PacketData, int PacketSize)
 {
+    bPacketGood = ValidatePacket(PacketData, PacketSize);
+    PacketSize -= 2;        // Drop CRC
+    
     EndOfData = PacketSize; // Ignore CRC, already checked
     if (PacketSize > 2)
     {
@@ -79,6 +83,7 @@ void PacketParser::Parse(const uint8_t *PacketData, int PacketSize)
         else
         {
             uint8_t PacketType = PacketData[1];
+            StartOfData = 2;
             switch (PacketType & 0xF)
             {
             case RecieveReady:
@@ -114,6 +119,11 @@ void PacketParser::Parse(const uint8_t *PacketData, int PacketSize)
 
 void PacketParser::Dump(const uint8_t *Data)
 {
+    if (!bPacketGood)
+    {
+        printf("Bad packet. CRC mismatch\n");
+        return;
+    }
     if (bSDLCValid)
     {
         printf("Packet for/to %02x\n", SDLC.Address);
