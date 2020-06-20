@@ -4,9 +4,21 @@
             "name": "ESP32",
             "includePath": [
                 "${workspaceFolder}/**",
-                "~/esp/esp-idf/components/**"
+                "~/esp/esp-idf/components/freertos/**",
+                "~/esp/esp-idf/components/driver/**",
+                "~/esp/esp-idf/components/esp32/**",
+                "~/esp/esp-idf/components/log/**",
+                "~/esp/esp-idf/components/soc/**",
+                "~/esp/esp-idf/components/newlib/**",
+                "~/esp/esp-idf/components/heap/**",
+                "~/esp/esp-idf/components/nvs_flash/**",
+                "~/esp/esp-idf/components/lwip/**",
+                "~/esp/esp-idf/components/app_update/**",
+                "~/esp/esp-idf/components/esp_http_client/**"
             ],
-            "defines": [],
+            "defines": [
+                "CONFIG_LOG_DEFAULT_LEVEL=0"
+            ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "c11",
             "cppStandard": "c++17",

@@ -124,3 +124,8 @@ struct ParsedSenseData
     uint8_t SubReason;
     uint16_t SpecificInfo;
 };
+
+extern char EBCDICToASCII[256];
+extern char ASCIIToEBCDIC[256];
+
+void BuildTextTables();
