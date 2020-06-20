@@ -14,7 +14,8 @@
                 "~/esp/esp-idf/components/nvs_flash/**",
                 "~/esp/esp-idf/components/lwip/**",
                 "~/esp/esp-idf/components/app_update/**",
-                "~/esp/esp-idf/components/esp_http_client/**"
+                "~/esp/esp-idf/components/esp_http_client/**",
+                "~/esp/esp-idf/components/esp_system/**"
             ],
             "defines": [
                 "CONFIG_LOG_DEFAULT_LEVEL=0"
