@@ -15,7 +15,8 @@ class NetworkState
 		StateDataReset,
 		StateSendScreen,
 		StateWaitForInput,
-		StateRespond
+		StateRespond,
+		StateRespond2
 	};
 
 public:

@@ -257,7 +257,7 @@ void MessageTask(void *pvParameters)
 				printf("\n");
 
 				PacketParser ProcessedPacket;
-				ProcessedPacket.Parse(PacketData, LengthOfPacket - 2);
+				ProcessedPacket.Parse(PacketData, LengthOfPacket);
 				ProcessedPacket.Dump(PacketData);
 				
 				Network.ProcessPacket(ProcessedPacket, PacketData);

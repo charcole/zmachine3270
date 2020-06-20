@@ -101,6 +101,11 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer)
             PositiveResponsePacket Response(Stream, 0, 2, 1, ProcessedPacket);
             Response.SendData({0x7d, 0x5d, 0xc3, 0x11, 0x5d, 0xc2, 0xf4});
         }
+        State = StateRespond2;
+        break;
+    }
+    case StateRespond2:
+    {
         {
             RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
         }
