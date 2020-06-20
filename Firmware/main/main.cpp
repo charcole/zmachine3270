@@ -67,6 +67,858 @@ volatile bool bQuitTasks = false;
 volatile bool bDoneQuitTask1 = false;
 volatile bool bDoneQuitTask2 = false;
 
+enum ESDLCPacketType
+{
+	InformationPacket = 0x00,
+	RecieveReady = 0x01,
+	RecieveNotReady = 0x05,
+	Reject = 0x09,
+	UnnumberedInfo = 0x03,
+	RequestInitializationMode = 0x07,
+	DisconnectMode = 0x0F,
+	RequestDisconnect = 0x43,
+	UnnumberedACK = 0x63,
+	FrameReject = 0x87,
+	XID = 0xAF,
+	Configure = 0xC7,
+	Test = 0xE3,
+	Beacon = 0xEF,
+	Unknown = 0xFF
+};
+
+enum ETransmissionHeaderType
+{
+	FMData = 0x00,
+	NetworkHeader = 0x20,
+	DataFlowControl = 0x40,
+	SessionControl = 0x60
+};
+
+enum ESenseDataReason
+{
+	UserSenseDataOnly = 0x00,
+	RequestReject = 0x08,
+	RequestError = 0x10,
+	StateError = 0x20,
+	ReqHdrUsageError = 0x40,
+	PathError = 0x80
+};
+
+enum ERequestRejectReason
+{
+	ResourceNotAvailable,
+	InterventionRequired,
+	MissingPassword,
+	InvalidPassword,
+	SessionLimitExceeded,
+	ResourceUnknown,
+	ResourceNotAvailable2,
+	InvalidContentsID,
+	ModeInconsistency,
+	PermissionRejected,
+	BracketRaceError,
+	ProcedureNotSupported,
+	NAUContention,
+	NAUNotAuthorized,
+	EndUserNotAuthorized,
+	MissingRequesterID,
+	Break,
+	UnsufficientResource,
+	BracketBidReject,
+	BracketBidReject2,
+	FunctionActive,
+	FunctionActive2,
+	LinkOrLinkResourceInactive,
+	LinkProcedureinProcess,
+	RTRNotRequired,
+	RequestSequenceError
+};
+
+struct ParsedSDLC
+{
+	ESDLCPacketType Type;
+	uint8_t Address;
+	uint8_t RecieveCount;
+	uint8_t SendCount;
+	bool bPollOrFinal;
+	bool bRecieveCountValid;
+	bool bSendCountValid;
+};
+
+struct ParsedFID2
+{
+	bool bStartOfBIU;
+	bool bEndOfBIU;
+	bool bODAI;
+	bool bExpidited;
+	uint8_t Destination;
+	uint8_t Origin;
+	uint16_t Sequence;
+};
+
+struct ParsedRU
+{
+	ETransmissionHeaderType HeaderType;
+	uint8_t ResponseType;
+	bool bHasFMHeader;
+	bool bBypassQueues;
+	bool bPAC;
+};
+
+struct ParsedRequest
+{
+	bool bStartOfChain;
+	bool bEndOfChain;
+	bool bBeginBracket;
+	bool bEndBracket;
+	bool bChangeDirection;
+	bool bEnciphered;
+	bool bPadded;
+	bool bConditionalEndBracket;
+	bool bCodeSelection;
+};
+
+struct ParsedResponce
+{
+	bool bPositiveResponse;
+};
+
+struct ParsedSenseData
+{
+	ESenseDataReason Reason;
+	uint8_t SubReason;
+	uint16_t SpecificInfo;
+};
+
+class ParsedPacket
+{
+public:
+	ParsedPacket()
+	{
+		memset(this, 0, sizeof(*this));
+		StartOfData = -1;
+	}
+	
+	void Parse(const uint8_t *PacketData, int PacketSize)
+	{
+		EndOfData = PacketSize; // Ignore CRC, already checked
+		if (PacketSize > 2)
+		{
+			bSDLCValid = true;
+			SDLC.Address = PacketData[0];
+			SDLC.RecieveCount = (PacketData[1] >> 5) & 7;
+			SDLC.SendCount = (PacketData[1] >> 1) & 7;
+			SDLC.bPollOrFinal = (PacketData[1] >> 4) & 1;
+			if ((PacketData[1] & 1) == 0)
+			{
+				SDLC.Type = InformationPacket;
+				SDLC.bRecieveCountValid = SDLC.bSendCountValid = true;
+
+				if (PacketSize > 7)
+				{
+					if ((PacketData[2] & 0xF0) == 0x20)
+					{
+						bFID2Valid = true;
+						FID2.bStartOfBIU = ((PacketData[2] & 0x08) != 0);
+						FID2.bEndOfBIU = ((PacketData[2] & 0x04) != 0);
+						FID2.bODAI = ((PacketData[2] & 0x02) != 0);
+						FID2.bExpidited = ((PacketData[2] & 0x01) != 0);
+						FID2.Destination = PacketData[4];
+						FID2.Origin = PacketData[5];
+						FID2.Sequence = (((int)PacketData[6] << 8) | PacketData[7]);
+
+						if (PacketSize > 10)
+						{
+							bResponseValid = ((PacketData[8] & 0x80) != 0);						
+							bRequestValid = ((PacketData[8] & 0x80) == 0);
+							RU.HeaderType = (ETransmissionHeaderType)(PacketData[8] & 0x60);
+							RU.bHasFMHeader = ((PacketData[8] & 0x08) != 0);
+							RU.ResponseType = (PacketData[9] & 0xA0);
+							RU.bBypassQueues = ((PacketData[9]&0x02) == 0);
+							RU.bPAC = ((PacketData[9]&0x01) != 0);
+							if (bRequestValid)
+							{
+								RU.ResponseType |= (PacketData[9] & 0x10);
+								Req.bStartOfChain = ((PacketData[8] & 0x02) != 0);
+								Req.bEndOfChain = ((PacketData[8] & 0x01) != 0);
+								Req.bBeginBracket = ((PacketData[10] & 0x80) != 0);
+								Req.bEndBracket = ((PacketData[10] & 0x40) != 0);
+								Req.bChangeDirection = ((PacketData[10] & 0x20) != 0);
+								Req.bCodeSelection = ((PacketData[10] & 0x08) != 0);
+								Req.bEnciphered = ((PacketData[10] & 0x04) != 0);
+								Req.bPadded = ((PacketData[10] & 0x02) != 0);
+								Req.bConditionalEndBracket = ((PacketData[10] & 0x01) != 0);
+							}
+							else if (bResponseValid)
+							{
+								Res.bPositiveResponse = ((PacketData[9] & 0x10) == 0);
+							}
+							StartOfData = 11;
+
+							if (PacketData[8] & 0x04)
+							{
+								bSenseValid = true;
+								Sense.Reason = (ESenseDataReason)PacketData[11];
+								Sense.SubReason = PacketData[12];
+								Sense.SpecificInfo = (((int)PacketData[13] << 8) | PacketData[14]);
+								StartOfData = 15;
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				uint8_t PacketType = PacketData[1];
+				switch (PacketType & 0xF)
+				{
+					case RecieveReady:
+					case RecieveNotReady:
+					case Reject:
+						SDLC.Type = (ESDLCPacketType)(PacketType & 0xF);
+						SDLC.bRecieveCountValid = true;
+						break;
+					default:
+						switch (PacketType & 0xEF)
+						{
+							case UnnumberedInfo:
+							case RequestInitializationMode:
+							case DisconnectMode:
+							case RequestDisconnect:
+							case UnnumberedACK:
+							case FrameReject:
+							case XID:
+							case Configure:
+							case Test:
+							case Beacon:
+								SDLC.Type = (ESDLCPacketType)(PacketType & 0xEF);
+								break;
+							default:
+								SDLC.Type = Unknown;
+								break;
+						}
+						break;
+				}
+			}
+		}
+	}
+
+	void Dump(const uint8_t* Data)
+	{
+		if (bSDLCValid)
+		{
+			printf("Packet for/to %02x\n", SDLC.Address);
+			switch (SDLC.Type)
+			{
+				case InformationPacket: printf("Information"); break;
+				case RecieveReady: printf("Recieve Ready"); break;
+				case RecieveNotReady: printf("Recieve Not Ready"); break;
+				case Reject: printf("Reject"); break;
+				case UnnumberedInfo: printf("Unnumbered Info"); break;
+				case RequestInitializationMode: printf("Request Initialization Mode"); break;
+				case DisconnectMode: printf("Disconnect Mode"); break;
+				case RequestDisconnect: printf("Request Disconnect"); break;
+				case UnnumberedACK: printf("Unnumbered ACK"); break;
+				case FrameReject: printf("Frame Reject"); break;
+				case XID: printf("XID"); break;
+				case Configure: printf("Configure"); break;
+				case Test: printf("Test"); break;
+				case Beacon: printf("Beacon"); break;
+				default: printf("Unknown"); break;
+			}
+			if (SDLC.bRecieveCountValid)
+			{
+				printf(" Nr=%d", SDLC.RecieveCount);
+			}
+			if (SDLC.bSendCountValid)
+			{
+				printf(" Ns=%d", SDLC.SendCount);
+			}
+			printf(" PollOrFinal=%d\n", SDLC.bPollOrFinal);
+		}
+			
+		if (bFID2Valid)
+		{
+			printf(" FID2\n");
+			printf(" Destination: %02x\n", FID2.Destination);
+			printf(" Origin: %02x\n", FID2.Origin);
+			printf(" Sequence: %04x\n", FID2.Sequence);
+			if (FID2.bStartOfBIU)
+			{
+				printf("  Start of BIU\n");
+			}
+			if (FID2.bEndOfBIU)
+			{
+				printf("  End of BIU\n");
+			}
+			if (FID2.bODAI)
+			{
+				printf("  ODAI?\n");
+			}
+			if (FID2.bExpidited)
+			{
+				printf("  Expedited\n");
+			}
+
+			if (bRequestValid || bResponseValid)
+			{
+				printf("  %s\n", bRequestValid ? "Request" : "Response");
+				switch (RU.HeaderType)
+				{
+					case FMData: printf("   FM data\n"); break;
+					case NetworkHeader: printf("   Network header\n"); break;
+					case DataFlowControl: printf("   Data flow control\n"); break;
+					case SessionControl: printf("   Session control\n"); break;
+				}
+				if (RU.bHasFMHeader)
+				{
+					printf("   FM header follows\n");
+				}
+				printf("   Response type: %02x\n", RU.ResponseType);
+				printf("   %s TC queues\n", RU.bBypassQueues ? "Bypass" : "Enqueue in");
+				printf("   %sPAC\n", RU.bPAC ? "" : "!");
+				if (bRequestValid)
+				{
+					if (Req.bStartOfChain)
+					{
+						printf("   Start of chain\n");
+					}
+					if (Req.bEndOfChain)
+					{
+						printf("   End of chain\n");
+					}
+					if (Req.bBeginBracket)
+					{
+						printf("   Begin Bracket\n");
+					}
+					if (Req.bEndBracket)
+					{
+						printf("   End Bracket\n");
+					}
+					if (Req.bChangeDirection)
+					{
+						printf("   Change Direction\n");
+					}
+					printf("   Code Selection: %d\n", Req.bCodeSelection ? 1 : 0);
+					if (Req.bEnciphered)
+					{
+						printf("   RU is enciphered\n");
+					}
+					if (Req.bPadded)
+					{
+						printf("   RU is padded\n");
+					}
+					if (Req.bConditionalEndBracket)
+					{
+						printf("   Conditional End Bracket\n");
+					}
+				}
+				else if (bResponseValid)
+				{
+					printf("   %s response\n", Res.bPositiveResponse ? "Positive" : "Negative");
+				}
+			}
+		}
+
+		if (bSenseValid)
+		{
+			switch (Sense.Reason)
+			{
+				case UserSenseDataOnly: printf("    User Sense Data Only\n"); break;
+				case RequestReject:
+					printf("    Request Reject\n");
+					switch(Sense.SubReason)
+					{
+						case ResourceNotAvailable: printf("     Resource Not Available\n"); break;
+						case InterventionRequired: printf("     Intervention Required\n"); break;
+						case MissingPassword: printf("     Missing Password\n"); break;
+						case InvalidPassword: printf("     Invalid Password\n"); break;
+						case SessionLimitExceeded: printf("     Session Limit Exceeded\n"); break;
+						case ResourceUnknown: printf("     Resource Unknown\n"); break;
+						case ResourceNotAvailable2: printf("     Resource Not Available\n"); break;
+						case InvalidContentsID: printf("     Invalid Contents ID\n"); break;
+						case ModeInconsistency: printf("     Mode Inconsistency\n"); break;
+						case PermissionRejected: printf("     Permission Rejected\n"); break;
+						case BracketRaceError: printf("     Bracket Race Error\n"); break;
+						case ProcedureNotSupported: printf("     Procedure Not Supported\n"); break;
+						case NAUContention: printf("     NAU Contention\n"); break;
+						case NAUNotAuthorized: printf("     NAU Not Authorized\n"); break;
+						case EndUserNotAuthorized: printf("     End User Not Authorized\n"); break;
+						case MissingRequesterID: printf("     Missing Requester ID\n"); break;
+						case Break: printf("     Break\n"); break;
+						case UnsufficientResource: printf("     Unsufficient Resource\n"); break;
+						case BracketBidReject: printf("     Bracket Bid Reject\n"); break;
+						case BracketBidReject2: printf("     Bracket Bid Reject\n"); break;
+						case FunctionActive: printf("     Function Active\n"); break;
+						case FunctionActive2: printf("     Function Active\n"); break;
+						case LinkOrLinkResourceInactive: printf("     Link or Link Resource Inactive\n"); break;
+						case LinkProcedureinProcess: printf("     Link Procedure in Process\n"); break;
+						case RTRNotRequired: printf("     RTR Not Required\n"); break;
+						case RequestSequenceError: printf("     Request Sequence Error\n"); break;
+						default:   printf("     Error code: %02x\n", Sense.SubReason);
+					}
+					break;
+				case RequestError: printf("    Request Error\n"); break;
+				case StateError: printf("    State Error\n"); break;
+				case ReqHdrUsageError: printf("    Request Header Usage Error\n"); break;
+				case PathError: printf("    Path Error\n"); break;
+			}
+			printf("     Specific Info: %04x\n", Sense.SpecificInfo);
+		}
+
+		if (StartOfData >= 0 && StartOfData < EndOfData)
+		{
+			printf("    Data:");
+			for (int DataIndex = StartOfData; DataIndex < EndOfData; DataIndex++)
+			{
+				printf(" %02x", Data[DataIndex]);
+			}
+			printf("\n");
+		}
+	}
+
+	ParsedSDLC SDLC;
+	ParsedFID2 FID2;
+	ParsedRU RU;
+	ParsedRequest Req;
+	ParsedResponce Res;
+	ParsedSenseData Sense;
+	int StartOfData;
+	int EndOfData;
+	bool bSDLCValid;
+	bool bFID2Valid;
+	bool bRequestValid;
+	bool bResponseValid;
+	bool bSenseValid;
+};
+
+class RawStream
+{
+public:
+	void SendByte(uint8_t Byte)
+	{
+		SendRaw(Byte);
+		History[Head & (kHistorySize - 1)] = Byte;
+		Head++;
+	}
+
+	void Resend(int Start, int End)
+	{
+		for (int Current = Start; Current < End; Current++)
+		{
+			SendRaw(History[Current]);
+		}
+	}
+
+	int Tell() const
+	{
+		return Head;
+	}
+
+	int GetData(uint8_t *Destination) const // For debug
+	{
+		memcpy(Destination, History, Head);
+		return Head;
+	}
+
+	void Reset()
+	{
+		Head = 0;
+	}
+
+private:
+	void SendRaw(uint8_t Byte)
+	{
+		//printf("Sending: %02x\n", Byte);
+	}
+
+	static constexpr int kHistorySize = 4096;
+	uint8_t History[kHistorySize];
+	int Head = 0;
+};
+
+class SDLCInfoStream : public RawStream
+{
+public:
+	void SetRecieveCount(uint8_t NewCount)
+	{
+		RecieveCount = NewCount;
+	}
+
+	uint8_t RecieveCount = 0;
+	uint8_t SendCount = 0;
+};
+
+class SNAStream : public SDLCInfoStream
+{
+public:
+	void SetSequence(uint16_t NewSequence)
+	{
+		Sequence = NewSequence;
+	}
+
+	uint16_t Sequence = 0;
+};
+
+class SDLCPacket
+{
+public:
+	SDLCPacket(RawStream& Stream)
+		: Raw(Stream)
+	{
+		SendData(Address);
+	}
+	
+	void SendData(uint8_t Byte)
+	{
+		
+		Raw.SendByte(Byte);
+	}
+
+	void SendData(std::initializer_list<uint8_t> List)
+	{
+		for (uint8_t Byte : List)
+		{
+			SendData(Byte);
+		}
+	}
+
+	~SDLCPacket()
+	{
+	}
+
+protected:
+	static constexpr uint8_t Address = 0x40;
+	static constexpr uint8_t Flag = 0x7E;
+	static constexpr uint8_t FinalFlag = 0x10;
+
+	RawStream& Raw;
+};
+
+class SDLCReadyToRecieve : public SDLCPacket
+{
+public:
+	SDLCReadyToRecieve(SDLCInfoStream& Stream, bool bFinal = true)
+		: SDLCPacket(Stream)
+	{
+		uint8_t Counts = 0x01 + (bFinal ? FinalFlag : 0);
+		Counts |= (Stream.RecieveCount << 5) & 0xE0;
+		SendData(Counts);
+	}
+};
+
+class SDLCSetNormalResponseMode : public SDLCPacket
+{
+public:
+	SDLCSetNormalResponseMode(SDLCInfoStream& Stream, bool bFinal = true)
+		: SDLCPacket(Stream)
+	{
+		SendData(0x83 + (bFinal ? FinalFlag : 0));
+	}
+};
+
+class SDLCRequestXID : public SDLCPacket
+{
+public:
+	SDLCRequestXID(SDLCInfoStream& Stream, bool bFinal = true)
+		: SDLCPacket(Stream)
+	{
+		SendData(0xAF + (bFinal ? FinalFlag : 0));
+	}
+};
+
+class SDLCInfoPacket : public SDLCPacket
+{
+public:
+	SDLCInfoPacket(SDLCInfoStream& Stream, bool bFinal = false)
+		: SDLCPacket(Stream)
+	{
+		uint8_t Counts = (bFinal ? FinalFlag : 0);
+		Counts |= (Stream.RecieveCount << 5) & 0xE0;
+		Counts |= (Stream.SendCount << 1) & 0x0E;
+		Stream.SendCount++;
+		SendData(Counts);
+	}
+};
+
+class TranmissionPacket : public SDLCInfoPacket
+{
+public:
+	TranmissionPacket(SNAStream& Stream, uint8_t Destination, uint8_t Source, bool bExpedited = false, bool bFinal = false, int SequenceOverride = -1)
+		: SDLCInfoPacket(Stream, bFinal)
+	{
+		SendData(TransHeader + (bExpedited ? ExpiditedFlag : 0));
+		SendData(0); // Reserved
+		SendData(Destination);
+		SendData(Source);
+		if (SequenceOverride >= 0)
+		{
+			SendData((SequenceOverride >> 8) & 0xFF);
+			SendData((SequenceOverride >> 0) & 0xFF);
+		}
+		else
+		{
+			SendData((Stream.Sequence >> 8) & 0xFF);
+			SendData((Stream.Sequence >> 0) & 0xFF);
+			if (!bExpedited)
+			{
+				Stream.Sequence++;
+			}
+		}
+	}
+
+private:
+	static constexpr uint8_t TransHeader = 0x2C; // FID 2 + whole BIU
+	static constexpr uint8_t ExpiditedFlag = 0x01;
+};
+
+class RequestPacket : public TranmissionPacket
+{
+public:
+	RequestPacket(SNAStream& Stream, uint8_t Category, uint8_t Destination, uint8_t Source, bool bExpedited = false, bool bFinal = false, bool bChangeDirection = false, bool bStartOfBracket = true)
+		: TranmissionPacket(Stream, Destination, Source, bExpedited, bFinal)
+	{
+		SendData((Category << 5) | 3); // Category + Start+end of chain
+		SendData(0x80 + (bChangeDirection?0x20:0x00)); // Definitive response required
+		SendData(bStartOfBracket ? 0xC0 : 0x40); // Start and end of bracket
+	}
+};
+
+class PositiveResponsePacket : public TranmissionPacket
+{
+public:
+	PositiveResponsePacket(SNAStream& Stream, uint8_t Category, uint8_t Destination, uint8_t Source, int SequenceOverride, bool bExpedited = false, bool bFinal = false)
+		: TranmissionPacket(Stream, Destination, Source, bExpedited, bFinal, SequenceOverride)
+	{
+		SendData((Category << 5) | 0x83); // Category + Response
+		SendData(0x80); // Definitive response + Positive
+		SendData(0x00);
+	}
+};
+
+char EBCDICToASCII[256];
+char ASCIIToEBCDIC[256];
+
+void Map(char ASCII, char EBCDIC)
+{
+	EBCDICToASCII[(uint8_t)EBCDIC] = ASCII;
+	ASCIIToEBCDIC[(uint8_t)ASCII] = EBCDIC;
+}
+
+void Map(char ASCIIStart, char ASCIIEnd, char EBCDIC)
+{
+	for (char ASCII = ASCIIStart; ASCII <= ASCIIEnd; ASCII++)
+	{
+		Map(ASCII, EBCDIC++);
+	}
+}
+
+void BuildTextTables()
+{
+	memset(EBCDICToASCII, ' ', sizeof (EBCDICToASCII));
+	memset(ASCIIToEBCDIC, 0x40, sizeof (ASCIIToEBCDIC));
+
+	Map('a', 'i', 0x81);
+	Map('j', 'r', 0x91);
+	Map('s', 'z', 0xA2);
+	Map('A', 'I', 0xC1);
+	Map('J', 'R', 0xD1);
+	Map('S', 'Z', 0xE2);
+	Map('0', '9', 0xF0);
+	Map('\n', 0x15);
+	Map(' ', 0x40);
+	Map(0xA2, 0x4A);
+	Map('.', 0x4B);
+	Map('<', 0x4C);
+	Map('(', 0x4D);
+	Map('+', 0x4E);
+	Map('|', 0x4F);
+	Map('&', 0x50);
+	Map('!', 0x5A);
+	Map('$', 0x5B);
+	Map('*', 0x5C);
+	Map(')', 0x5D);
+	Map(';', 0x5E);
+	Map(0xAC, 0x5F);
+	Map('-', 0x60);
+	Map('/', 0x61);
+	Map(0xA6, 0x6A);
+	Map(',', 0x6B);
+	Map('%', 0x6C);
+	Map('_', 0x6D);
+	Map('>', 0x6E);
+	Map('?', 0x6F);
+	Map(':', 0x7A);
+	Map('#', 0x7B);
+	Map('@', 0x7C);
+	Map('\'', 0x7D);
+	Map('=', 0x7E);
+	Map('"', 0x7F);
+}
+
+class NetworkState
+{
+	enum EState
+	{
+		StateXID,
+		StateNrm,
+		StateActPU,
+		StateActLU,
+		StateBind,
+		StateDataReset,
+		StateSendScreen,
+		StateWaitForInput,
+		StateRespond
+	};
+
+public:
+	NetworkState()
+	{
+		BuildTextTables();
+	}
+
+	int GenerateNewPackets(uint8_t* Buffer)
+	{
+		Stream.Reset();
+		if (bSendReadyToRecieve)
+		{
+			SDLCReadyToRecieve RR(Stream);
+			bSendReadyToRecieve = false;
+			return Stream.GetData(Buffer);
+		}
+		switch (State)
+		{
+			case StateXID:
+			{
+				SDLCRequestXID XID(Stream);
+				State = StateNrm;
+				break;
+			}
+			case StateNrm:
+			{
+				SDLCSetNormalResponseMode SetNrmRes(Stream);
+				State = StateActPU;
+				break;
+			}
+			case StateActPU:
+			{
+				Stream.SetSequence(0x1568);
+				{
+					RequestPacket ACTPU(Stream, 3, 0, 0, true);
+					ACTPU.SendData({0x11, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A});
+				}
+				bSendReadyToRecieve = true;
+				State = StateActLU;
+				break;
+			}
+			case StateActLU:
+			{
+				Stream.SetSequence(0x1569);
+				{
+					RequestPacket ACTLU(Stream, 3, 2, 0, true);
+					ACTLU.SendData({0x0D, 0x01, 0x01});
+				}
+				bSendReadyToRecieve = true;
+				State = StateBind;
+				break;
+			}
+			case StateBind:
+			{
+				Stream.SetSequence(0x0);
+				{
+					RequestPacket Bind(Stream, 3, 2, 1);
+					Bind.SendData({
+							0x31, 0x01, 0x03, 0x03, 0xA1, 0xA1, 0x30, 0x80, 0x00,
+							0x01, 0x85, 0x85, 0x0A, 0x00, 0x02, 0x11, 0x00, 0x00,
+							0xB1, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+							0x04, 0xD1, 0xE2, 0xC9, 0xD6, 0x00
+							});
+				}
+				bSendReadyToRecieve = true;
+				State = StateDataReset;
+				break;
+			}
+			case StateDataReset:
+			{
+				{
+					RequestPacket DataReset(Stream, 3, 2, 1);
+					DataReset.SendData(0xA0);
+				}
+				bSendReadyToRecieve = true;
+				State = StateSendScreen;
+				break;
+			}
+			case StateSendScreen:
+			{
+				{
+					RequestPacket DataStream3270(Stream, 0, 2, 1);
+					DataStream3270.SendData({0xF1, 0xD3, 0x11, 0x5C, 0xF0, 0x1D, 0xF0});
+					const char* Message = "You did it! ";
+					while (*Message)
+					{
+						DataStream3270.SendData(ASCIIToEBCDIC[(uint8_t)*Message++]);
+					}
+					DataStream3270.SendData({0x6E, 0x40, 0x1D, 0x40, 0x13, 0x11, 0x5D, 0x7F, 0x1D, 0xF0});
+				}
+				bSendReadyToRecieve = true;
+				State = StateWaitForInput;
+				break;
+			}
+			case StateWaitForInput:
+			{
+				SDLCReadyToRecieve RR(Stream);
+				break;
+			}
+			case StateRespond:
+			{
+				{
+					// TODO: ERI?
+					PositiveResponsePacket Response(Stream, 0, 2, 1, ProcessedPacket);
+					Response.SendData({0x7d, 0x5d, 0xc3, 0x11, 0x5d, 0xc2, 0xf4});
+				}
+				{
+					RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
+				}
+				bSendReadyToRecieve = true;
+				State = StateWaitForInput;
+				break;
+			}
+		}
+		return Stream.GetData(Buffer);
+	}
+
+	void ProcessPacket(const ParsedPacket& Packet, const uint8_t* Data)
+	{
+		if (Packet.bSDLCValid)
+		{
+			if (Packet.SDLC.bSendCountValid)
+			{
+				Stream.SetRecieveCount(Packet.SDLC.RecieveCount);
+			}
+		}
+		if (Packet.bRequestValid && Packet.Req.bChangeDirection)
+		{
+			if (Packet.FID2.Sequence != ProcessedPacket)
+			{
+				State = StateRespond;
+				if (Packet.bResponseValid || Packet.bRequestValid)
+				{
+					//Stream.SetSequence(Packet.FID2.Sequence + 1);
+					ProcessedPacket = Packet.FID2.Sequence;
+				}
+			}
+		}
+	}
+
+private:
+	EState State = StateXID;
+	SNAStream Stream;
+	uint16_t ProcessedPacket = 0xFFFF;
+	bool bSendReadyToRecieve = false;
+};
+
+NetworkState Network;
+
 static void ClearSettings()
 {
 	Config =
@@ -204,7 +1056,7 @@ class CBitStream
 	private:
 		enum
 		{
-			MAX_MESSAGE_LENGTH = 64
+			MAX_MESSAGE_LENGTH = 128
 		};
 
 		int32_t TotalBits;
@@ -227,7 +1079,7 @@ void CalculateCRC(CBitStream& Dest, CBitStream& Source)
 		if (bDataBit)
 		{
 			CRC ^= (1<<5) + (1<<12);
-		};
+		}
 		Dest.WriteBit(bData);
 	}
 	for (int BitIndex = 0; BitIndex < 16; BitIndex++)
@@ -276,6 +1128,45 @@ void ZeroBitAndFlagInsertion(CBitStream& Dest, CBitStream& Source)
 	}
 	InsertFlags(Dest);
 	Dest.Flush();
+}
+
+uint16_t CRCLookup[16][16]; // 512 bytes
+
+void BuildCRCLookup()
+{
+	for (uint16_t DataNibble=0; DataNibble<16; DataNibble++)
+	{
+		for (uint16_t CRCNibble=0; CRCNibble<16; CRCNibble++)
+		{
+			uint16_t Data = DataNibble;
+			uint16_t CRC = (CRCNibble << 12);
+			for (uint8_t Step = 0; Step < 4; Step++)
+			{
+				uint16_t bLastBit = (CRC >> 15);
+				uint16_t bDataBit = (Data & 1) ^ bLastBit;
+				Data >>= 1;
+				CRC = bDataBit + (CRC << 1);
+				if (bDataBit)
+				{
+					CRC ^= (1<<5) + (1<<12);
+				}
+			}
+			CRCLookup[CRCNibble][DataNibble]=CRC;
+		}
+	}
+}
+
+bool ValidatePacket(uint8_t *Data, size_t Length)
+{
+	uint16_t CRC = 0xFFFF;
+	while (Length--)
+	{
+		uint16_t Byte = *(Data++);
+		CRC = (CRC << 4) ^ CRCLookup[CRC>>12][Byte & 0xF];
+		Byte >>= 4;
+		CRC = (CRC << 4) ^ CRCLookup[CRC>>12][Byte & 0xF];
+	}
+	return (CRC == 0x1D0F);
 }
 
 void WifiStartListening(void *pvParameters)
@@ -474,21 +1365,32 @@ void CPU0Task(void *pvParameters)
 {
 	ESP_LOGI(LogTag, "CPU0Task started\n");
 
-	uint8_t Msg[] = { 0x40, 0xBF };
+	BuildCRCLookup();
 
-	CBitStream A(Msg, sizeof(Msg));
-	CBitStream B;
-
-	A.Flush();
-	CalculateCRC(B, A);
-	ZeroBitAndFlagInsertion(A, B);
-
-	int NumBitsToSend = 0;
-	const uint8_t* BytesToSend = A.ToBytes(NumBitsToSend);
+	vTaskDelay(10000);
 
 	while (!bQuitTasks)
 	{
-		printf("Sending packet\n");
+		uint8_t SendBuffer[128];
+		int SendSize = Network.GenerateNewPackets(SendBuffer);
+		
+		printf("Sending packet of size %d\n", SendSize);
+		for (int i=0; i<SendSize; i++)
+		{
+			printf("%02x ", SendBuffer[i]);
+		}
+		printf("\n");
+
+		CBitStream A(SendBuffer, SendSize);
+		CBitStream B;
+
+		A.Flush();
+		CalculateCRC(B, A);
+		ZeroBitAndFlagInsertion(A, B);
+
+		int NumBitsToSend = 0;
+		const uint8_t* BytesToSend = A.ToBytes(NumBitsToSend);
+
 		// Queue our packet to be sent
 		PacketToSend SendPacket;
 		SendPacket.NumBits = NumBitsToSend;
@@ -502,12 +1404,39 @@ void CPU0Task(void *pvParameters)
 		uint32_t Packet[2];
 		while (xQueueReceive(RecvEventQueue, Packet, WaitTime))
 		{
-			printf("Recieved packet %d to %d\n", Packet[0], Packet[1]);
-			while (Packet[0] < Packet[1])
+			const int LengthOfPacket = Packet[1] - Packet[0];
+			uint8_t PacketData[256];
+			
+			bool bGoodPacket = false;
+			if (LengthOfPacket < sizeof(PacketData))
 			{
-				printf("%02x\n", RingBuff[Packet[0] & RING_BUF_MASK]);
-				Packet[0]++;
+				for (int PacketIndex = 0; PacketIndex < LengthOfPacket; PacketIndex++)
+				{
+					PacketData[PacketIndex] = RingBuff[(Packet[0]++) & RING_BUF_MASK];
+				}
+				bGoodPacket = (ValidatePacket(PacketData, LengthOfPacket));
 			}
+			
+			if (bGoodPacket)
+			{
+				printf("Recieved good packet of length %d\n", LengthOfPacket);
+				for (int i=0; i<LengthOfPacket; i++)
+				{
+					printf("%02x ", PacketData[i]);
+				}
+				printf("\n");
+
+				ParsedPacket ProcessedPacket;
+				ProcessedPacket.Parse(PacketData, LengthOfPacket - 2);
+				ProcessedPacket.Dump(PacketData);
+				
+				Network.ProcessPacket(ProcessedPacket, PacketData);
+			}
+			else
+			{
+				printf("Recieved bad packet of length %d :(\n", LengthOfPacket);
+			}
+			
 			WaitTime = 0;
         }
 	}
