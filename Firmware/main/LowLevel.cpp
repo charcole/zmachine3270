@@ -126,7 +126,7 @@ class CBitStream
 	private:
 		enum
 		{
-			MAX_MESSAGE_LENGTH = 128
+			MAX_MESSAGE_LENGTH = (2048+1024)
 		};
 
 		int32_t TotalBits;
@@ -207,7 +207,7 @@ void MessageTask(void *pvParameters)
 
 	while (!bQuitTasks)
 	{
-		uint8_t SendBuffer[128];
+		uint8_t SendBuffer[2048+1024];
 		bool bWaitForReply = false;
 		int SendSize = Network.GenerateNewPackets(SendBuffer, bWaitForReply);
 		
@@ -241,7 +241,7 @@ void MessageTask(void *pvParameters)
 		while (xQueueReceive(RecvEventQueue, Packet, WaitTime))
 		{
 			const int LengthOfPacket = Packet[1] - Packet[0];
-			uint8_t PacketData[256];
+			uint8_t PacketData[1024];
 			
 			if (LengthOfPacket < sizeof(PacketData))
 			{
@@ -436,7 +436,7 @@ void InitializeGPIO()
 	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
 
 	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
-	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_POSEDGE); // TODO: Might be negative edge (change with SPI mode)
+	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_NEGEDGE); // TODO: Might be negative edge (change with SPI mode)
 	gpio_intr_enable(IN_SDLCCLOCK);
 }
 
@@ -451,6 +451,6 @@ void CreateSendRecieveTasks()
     InitializeClock();
 	InitializeGPIO();
 
-	xTaskCreatePinnedToCore(&MessageTask, "MessageTask", 8192, NULL, 5, &RecvTask, 0);
+	xTaskCreatePinnedToCore(&MessageTask, "MessageTask", 2*8192, NULL, 5, &RecvTask, 0);
 	xTaskCreatePinnedToCore(&SendTask, "SendTask", 8192, NULL, 5, NULL, 1);
 }

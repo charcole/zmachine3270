@@ -6,6 +6,8 @@
 #include <math.h>
 #include <ctype.h>
 
+#include "Screen.h"
+
 typedef unsigned char		u8;
 typedef unsigned short		u16;
 typedef unsigned int		u32;
@@ -543,7 +545,7 @@ int printText(int address)
 				longNext--;
 				if (longNext==0)
 				{
-					printf("%c", (char)longChar);
+					ScreenPrintChar((char)longChar);
 				}
 			}
 			else if (!abbrNext)
@@ -555,7 +557,7 @@ int printText(int address)
 				else if (characters[i]>=6)
 				{
 					characters[i]-=6;
-					printf("%c", alphabetLookup[alphabet][characters[i]]);
+					ScreenPrintChar(alphabetLookup[alphabet][characters[i]]);
 					alphabet=0;
 				}
 				else if (characters[i]==4)
@@ -568,7 +570,7 @@ int printText(int address)
 				}
 				else if (characters[i]==0)
 				{
-					printf(" ");
+					ScreenPrintChar(' ');
 				}
 				else
 				{
@@ -814,7 +816,7 @@ void process0OPInstruction()
 			break;
 		case 3: //print_ret
 			m_pc=printText(m_pc);
-			printf("\n");
+			ScreenPrintChar('\n');
 			returnRoutine(1);
 			break;
 		case 4: //nop
@@ -838,7 +840,7 @@ void process0OPInstruction()
 			haltInstruction();
 			break;
 		case 0xB: //new_line
-			printf("\n");
+			ScreenPrintChar('\n');
 			break;
 		case 0xC: //show_status
 			haltInstruction();
@@ -1193,7 +1195,7 @@ void processVARInstruction()
 				int realInLen=0;
 				int inLen;
 				int i;
-				fgets(input, sizeof(input), stdin);
+				ScreenReadInput(input, sizeof(input));
 				inLen=strlen(input);
 				for (i=0; i<inLen && i<maxLength; i++)
 				{
@@ -1209,11 +1211,15 @@ void processVARInstruction()
 				break;
 			}
 		case 5: //print_char
-			printf("%c", (char)m_ins.operands[0].value);
+			ScreenPrintChar((char)m_ins.operands[0].value);
 			break;
 		case 6: //print_num
-			printf("%d", m_ins.operands[0].value);
-			break;
+			{
+				char NumString[32];
+				sprintf(NumString, "%d", m_ins.operands[0].value);
+				ScreenPrint(NumString);
+				break;
+			}
 		case 7: //random
 			{
 				int maxValue=m_ins.operands[0].value;
@@ -1346,7 +1352,7 @@ void executeInstruction()
 	}
 }
 
-void zopsMain(char* GameData)
+void zopsMain(const char* GameData)
 {
 	byte Flags = 0;
 

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "game.h"
+
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-void zopsMain(char* GameData);
+void zopsMain(const char* GameData);
 #ifdef __cplusplus
 }
 #endif

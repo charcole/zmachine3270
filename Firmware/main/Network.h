@@ -28,5 +28,6 @@ private:
 	EState State = StateXID;
 	SNAStream Stream;
 	uint16_t ProcessedPacket = 0xFFFF;
+	int CurrentLine = 0;
 	bool bSendReadyToRecieve = false;
 };

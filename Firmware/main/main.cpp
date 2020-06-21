@@ -21,6 +21,7 @@ extern "C"
 #include "esp_http_client.h"
 };
 #include "webpage.h"
+#include "zops.h"
 
 #define ARRAY_NUM(x) (sizeof(x)/sizeof(x[0]))
 
@@ -345,6 +346,11 @@ void wifi_init_sta()
              EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
 }
 
+void GameTask(void *pvParameters)
+{
+	zopsMain(Game);
+}
+
 extern "C" void app_main(void)
 {
 	//Initialize NVS
@@ -369,5 +375,6 @@ extern "C" void app_main(void)
 	printf("Connected\n\n");
 	
 	xTaskCreatePinnedToCore(&WifiStartListening, "WifiConfig", 8192, NULL, 5, NULL, 0);
+	xTaskCreatePinnedToCore(&GameTask, "GameTask", 8192, NULL, 5, NULL, 0);
 	CreateSendRecieveTasks();
 }

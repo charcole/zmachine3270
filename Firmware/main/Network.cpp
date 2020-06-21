@@ -1,4 +1,5 @@
 #include "Network.h"
+#include "Screen.h"
 
 NetworkState::NetworkState()
 {
@@ -80,17 +81,41 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     case StateSendScreen:
     {
         {
-            RequestPacket DataStream3270(Stream, 0, 2, 1);
-            DataStream3270.SendData({0xF1, 0xD3, 0x11, 0x5C, 0xF0, 0x1D, 0xF0});
-            const char *Message = "Talk to me";
-            while (*Message)
+            uint16_t ScreenAddress = CurrentLine * 80;
+            int CurX = 0, CurY = 0;
+            if (CurrentLine >= 24)
             {
-                DataStream3270.SendData(ASCIIToEBCDIC[(uint8_t)*Message++]);
+                GScreen.GetCursorPosition(CurX, CurY);
+                ScreenAddress = CurY * 80 + CurX;
             }
-            DataStream3270.SendData({0x6E, 0x40, 0x1D, 0x40, 0x13, 0x11, 0x5D, 0x7F, 0x1D, 0xF0});
+            ScreenAddress = ((ScreenAddress&0x0FC0) << 2) | (ScreenAddress & 0x3F);
+            ScreenAddress |= 0x4040;
+
+            RequestPacket DataStream3270(Stream, 0, 2, 1);
+            DataStream3270.SendData({0xF1, 0xD3, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress)});//, 0x1D, 0xF0});
+
+            if (CurrentLine < 24)
+            {
+                char ScreenData[80 * 24];
+                GScreen.SerializeScreen3270(ScreenData);
+                for (int ScreenIndex = 0; ScreenIndex < 80 * 2; ScreenIndex++)
+                {
+                    DataStream3270.SendData(ScreenData[80 * CurrentLine + ScreenIndex]);
+                }
+                CurrentLine += 2;
+            }
+            else
+            {
+                ScreenAddress = CurY * 80 + 79;
+                ScreenAddress = ((ScreenAddress & 0x0FC0) << 2) | (ScreenAddress & 0x3F);
+                ScreenAddress |= 0x4040;
+
+                CurrentLine = 0;
+                DataStream3270.SendData({0x1D, 0x40, 0x13, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress), 0x1D, 0xF0});
+                State = StateWaitForInput;
+            }
         }
         bSendReadyToRecieve = true;
-        State = StateWaitForInput;
         break;
     }
     case StateWaitForInput:
@@ -115,7 +140,7 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
             RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
         }
         bSendReadyToRecieve = true;
-        State = StateWaitForInput;
+        State = StateDataReset;
         break;
     }
     }
@@ -145,6 +170,19 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
             {
                 //Stream.SetSequence(Packet.FID2.Sequence + 1);
                 ProcessedPacket = Packet.FID2.Sequence;
+
+                char InputString[128];
+                if (Packet.EndOfData - Packet.StartOfData - 6 < sizeof(InputString) - 1)
+                {
+                    char *Input = InputString;
+                    for (int TextIndex = Packet.StartOfData + 6; TextIndex < Packet.EndOfData; TextIndex++)
+                    {
+                        *(Input++) = EBCDICToASCII[Data[TextIndex]];
+                    }
+                    *(Input++) = '\0';
+                    printf("Input: %s\n", InputString);
+                    GScreen.ProvideInput(InputString);
+                }
             }
         }
     }

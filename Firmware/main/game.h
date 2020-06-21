@@ -4,7 +4,7 @@
 extern "C"
 {
 #endif
-extern const uint8_t Game[];
+extern const char Game[];
 #ifdef __cplusplus
 }
 #endif
