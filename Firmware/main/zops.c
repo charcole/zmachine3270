@@ -74,7 +74,7 @@ void *stackPeek(stack *s)
 	return ret;
 }
 
-#define MAX_TOKEN_LEN 256
+#define MAX_TOKEN_LEN 24
 
 enum
 {
@@ -132,7 +132,7 @@ typedef struct ZCallStack_s
 {
 	int returnAddr;
 	int returnStore;
-	int locals[16];
+	s16 locals[16];
 	int depth;
 } ZCallStack;
 
@@ -169,11 +169,28 @@ static int m_globalVariables;
 static int m_abbrevTable;
 static int m_objectTable;
 static int m_dictionaryTable;
-static byte *memory;
-static int m_numberstack[1024];
+static int m_endOfDynamic;
+static const byte *memory;
+static byte *dynamic;
+static s16 m_numberstack[256];
 static stack m_stack;
 static ZCallStack m_callstackcontents[96];
 static stack m_callStack;
+
+byte ReadMemory(int Address)
+{
+	if (Address < m_endOfDynamic)
+	{
+		return dynamic[Address];
+	}
+	return memory[Address];
+}
+
+void SetMemory(int Address, byte Value)
+{
+	ASSERT(Address < m_endOfDynamic);
+	dynamic[Address] = Value;
+}
 
 int makeS16(int msb, int lsb)
 {
@@ -192,7 +209,7 @@ int makeU16(int msb, int lsb)
 
 int readBytePC()
 {
-	return memory[m_pc++]&0xFF;
+	return ReadMemory(m_pc++)&0xFF;
 }
 
 int readS16PC()
@@ -206,7 +223,7 @@ int readVariable(int var)
 {
 	if (var==0)
 	{
-		return *(int*)stackPop(&m_stack);
+		return *(s16*)stackPop(&m_stack);
 	}
 	if (var<16)
 	{
@@ -214,7 +231,7 @@ int readVariable(int var)
 	}
 	int off=2*(var-16);
 	off+=m_globalVariables;
-	return makeS16(memory[off]&0xFF, memory[off+1]&0xFF); 
+	return makeS16(ReadMemory(off)&0xFF, ReadMemory(off+1)&0xFF); 
 }
 
 void setVariable(int var, int value)
@@ -226,7 +243,7 @@ void setVariable(int var, int value)
 	}
 	if (var==0)
 	{
-		*(int*)stackPush(&m_stack)=value;
+		*(s16*)stackPush(&m_stack)=value;
 		return;
 	}
 	if (var<16)
@@ -236,8 +253,8 @@ void setVariable(int var, int value)
 	}
 	int off=2*(var-16);
 	off+=m_globalVariables;
-	memory[off+0]=(byte)((value&0xFF00)>>8);
-	memory[off+1]=(byte)((value&0x00FF)>>0); 
+	SetMemory(off+0, (byte)((value&0xFF00)>>8));
+	SetMemory(off+1, (byte)((value&0x00FF)>>0)); 
 }
 
 void setVariableIndirect(int var, int value)
@@ -263,7 +280,7 @@ ZObject getObject(int id)
 {
 	ZObject ret;
 	ret.addr=m_objectTable+2*31+9*(id-1);
-	ret.propTable=makeU16(memory[ret.addr+7]&0xFF, memory[ret.addr+8]&0xFF);
+	ret.propTable=makeU16(ReadMemory(ret.addr+7)&0xFF, ReadMemory(ret.addr+8)&0xFF);
 	return ret;
 }
 
@@ -271,11 +288,11 @@ ZProperty getProperty(ZObject obj, int id)
 {
 	ZProperty ret;
 	int address=obj.propTable;
-	int textLen=memory[address++]&0xFF;
+	int textLen=ReadMemory(address++)&0xFF;
 	address+=textLen*2;
-	while (memory[address]!=0)
+	while (ReadMemory(address)!=0)
 	{
-		int sizeId=memory[address++]&0xFF;
+		int sizeId=ReadMemory(address++)&0xFF;
 		int size=1+(sizeId>>5);
 		int propId=sizeId&31;
 		if (propId==id)
@@ -440,14 +457,14 @@ void callRoutine(int address, int returnStore, int setOperands)
 	}
 	else
 	{
-		int numLocals=memory[address++]%0xFF;
+		int numLocals=ReadMemory(address++)%0xFF;
 		int i;
 		ZCallStack cs;
 		cs.returnAddr=m_pc;
 		cs.returnStore=returnStore;
 		for (i=0; i<numLocals; i++)
 		{
-			cs.locals[i]=makeS16(memory[address]&0xFF, memory[address+1]&0xFF);
+			cs.locals[i]=makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF);
 			address+=2;
 		}
 		if (setOperands)
@@ -511,8 +528,8 @@ int printText(int address)
 	while ((pair1&0x80)==0)
 	{
 		int i;
-		pair1=memory[address++]&0xFF;
-		pair2=memory[address++]&0xFF;
+		pair1=ReadMemory(address++)&0xFF;
+		pair2=ReadMemory(address++)&0xFF;
 		characters[0]=(pair1&0x7C)>>2;
 		characters[1]=((pair1&3)<<3) + ((pair2&0xE0)>>5);
 		characters[2]=pair2&0x1F;
@@ -563,7 +580,7 @@ int printText(int address)
 			{
 				int idx=32*(abbrChar-1)+characters[i];
 				int abbrevTable=m_abbrevTable+2*idx;
-				int abbrevAddress=makeU16(memory[abbrevTable]&0xFF, memory[abbrevTable+1]&0xFF);
+				int abbrevAddress=makeU16(ReadMemory(abbrevTable)&0xFF, ReadMemory(abbrevTable+1)&0xFF);
 				printText(2*abbrevAddress);
 				abbrNext=FALSE;
 			}
@@ -575,24 +592,24 @@ int printText(int address)
 void removeObject(int childId)
 {
 	ZObject child=getObject(childId);
-	int parentId=memory[child.addr+4]&0xFF;
+	int parentId=ReadMemory(child.addr+4)&0xFF;
 	if (parentId!=0)
 	{
 		ZObject parent=getObject(parentId);
-		if ((memory[parent.addr+6]&0xFF)==childId)
+		if ((ReadMemory(parent.addr+6)&0xFF)==childId)
 		{
-			memory[parent.addr+6]=memory[child.addr+5]; // parent.child=child.sibling
+			SetMemory(parent.addr+6, ReadMemory(child.addr+5)); // parent.child=child.sibling
 		}
 		else
 		{
-			int siblingId=memory[parent.addr+6]&0xFF;
+			int siblingId=ReadMemory(parent.addr+6)&0xFF;
 			while (siblingId!=0)
 			{
 				ZObject sibling=getObject(siblingId);
-				int nextSiblingId=memory[sibling.addr+5]&0xFF;
+				int nextSiblingId=ReadMemory(sibling.addr+5)&0xFF;
 				if (nextSiblingId==childId)
 				{
-					memory[sibling.addr+5]=memory[child.addr+5]; // sibling.sibling=child.sibling
+					SetMemory(sibling.addr+5, ReadMemory(child.addr+5)); // sibling.sibling=child.sibling
 					break;
 				}
 				siblingId=nextSiblingId;
@@ -602,8 +619,8 @@ void removeObject(int childId)
 				illegalInstruction();
 			}
 		}
-		memory[child.addr+4]=0;
-		memory[child.addr+5]=0;
+		SetMemory(child.addr+4, 0);
+		SetMemory(child.addr+5, 0);
 	}
 }
 
@@ -611,9 +628,9 @@ void addChild(int parentId, int childId)
 {
 	ZObject child=getObject(childId);
 	ZObject parent=getObject(parentId);
-	memory[child.addr+5]=memory[parent.addr+6]; // child.sibling=parent.child
-	memory[child.addr+4]=(byte)parentId; // child.parent=parent
-	memory[parent.addr+6]=(byte)childId; // parent.child=child
+	SetMemory(child.addr+5, ReadMemory(parent.addr+6)); // child.sibling=parent.child
+	SetMemory(child.addr+4, (byte)parentId); // child.parent=parent
+	SetMemory(parent.addr+6, (byte)childId); // parent.child=child
 }
 
 void zDictInit(ZDictEntry *entry)
@@ -691,15 +708,15 @@ ZDictEntry encodeToken(char* token)
 
 int getDictionaryAddress(char* token, int dictionary)
 {
-	int entryLength = memory[dictionary++]&0xFF;
-	int numEntries = makeU16(memory[dictionary+0]&0xFF, memory[dictionary+1]&0xFF);
+	int entryLength = ReadMemory(dictionary++)&0xFF;
+	int numEntries = makeU16(ReadMemory(dictionary+0)&0xFF, ReadMemory(dictionary+1)&0xFF);
 	ZDictEntry zde = encodeToken(token);
 	int i;
 	dictionary+=2;
 	for (i=0; i<numEntries; i++)
 	{
-		if (zde.coded[0]==(memory[dictionary+0]&0xFF) && zde.coded[1]==(memory[dictionary+1]&0xFF)
-				&& zde.coded[2]==(memory[dictionary+2]&0xFF) && zde.coded[3]==(memory[dictionary+3]&0xFF))
+		if (zde.coded[0]==(ReadMemory(dictionary+0)&0xFF) && zde.coded[1]==(ReadMemory(dictionary+1)&0xFF)
+				&& zde.coded[2]==(ReadMemory(dictionary+2)&0xFF) && zde.coded[3]==(ReadMemory(dictionary+3)&0xFF))
 		{
 			return dictionary;
 		}
@@ -710,17 +727,19 @@ int getDictionaryAddress(char* token, int dictionary)
 
 int lexicalAnalysis(char* input, int parseBuffer, int maxEntries)
 {
-	static ZToken tokens[256];
-	static char seps[256];
+	static ZToken tokens[64];
+	static char seps[32];
 	int numTokens=0;
 	int dictionaryAddress=m_dictionaryTable;
-	int numSeperators=memory[dictionaryAddress++];
+	int numSeperators=ReadMemory(dictionaryAddress++);
 	char *current=input;
 	char *end=input+strlen(current);
 	int i;
+	ASSERT(maxEntries <= ARRAY_SIZEOF(tokens));
+	ASSERT(numSeperators <= ARRAY_SIZEOF(seps));
 	for (i=0; i<numSeperators; i++)
 	{
-		seps[i]=(char)memory[dictionaryAddress++];
+		seps[i]=(char)ReadMemory(dictionaryAddress++);
 	}
 	while (current!=end)
 	{
@@ -771,10 +790,10 @@ int lexicalAnalysis(char* input, int parseBuffer, int maxEntries)
 	for (i=0; i<numTokens && i<maxEntries; i++)
 	{
 		int outAddress=getDictionaryAddress(tokens[i].token, dictionaryAddress);
-		memory[parseBuffer++]=(byte)((outAddress>>8)&0xFF);
-		memory[parseBuffer++]=(byte)((outAddress>>0)&0xFF);
-		memory[parseBuffer++]=(byte)strlen(tokens[i].token);
-		memory[parseBuffer++]=(byte)(tokens[i].offset+1);
+		SetMemory(parseBuffer++, (byte)((outAddress>>8)&0xFF));
+		SetMemory(parseBuffer++, (byte)((outAddress>>0)&0xFF));
+		SetMemory(parseBuffer++, (byte)strlen(tokens[i].token));
+		SetMemory(parseBuffer++, (byte)(tokens[i].offset+1));
 	}
 
 	return MIN(maxEntries, numTokens);
@@ -810,7 +829,7 @@ void process0OPInstruction()
 			haltInstruction();
 			break;
 		case 8: //ret_popped
-			returnRoutine(*(int*)stackPop(&m_stack));
+			returnRoutine(*(s16*)stackPop(&m_stack));
 			break;
 		case 9: //pop
 			stackPop(&m_stack);
@@ -846,7 +865,7 @@ void process1OPInstruction()
 		case 1: //get_sibling
 			{
 				ZObject child=getObject(m_ins.operands[0].value);
-				int siblingId=memory[child.addr+5]&0xFF;
+				int siblingId=ReadMemory(child.addr+5)&0xFF;
 				setVariable(m_ins.store, siblingId);
 				doBranch(siblingId!=0, m_ins.branch);
 				break;
@@ -854,7 +873,7 @@ void process1OPInstruction()
 		case 2: //get_child
 			{
 				ZObject child=getObject(m_ins.operands[0].value);
-				int childId=memory[child.addr+6]&0xFF;
+				int childId=ReadMemory(child.addr+6)&0xFF;
 				setVariable(m_ins.store, childId);
 				doBranch(childId!=0, m_ins.branch);
 				break;
@@ -862,13 +881,13 @@ void process1OPInstruction()
 		case 3: //get_parent_object
 			{
 				ZObject child=getObject(m_ins.operands[0].value);
-				setVariable(m_ins.store, memory[child.addr+4]&0xFF);
+				setVariable(m_ins.store, ReadMemory(child.addr+4)&0xFF);
 				break;
 			}
 		case 4: //get_prop_len
 			{
 				int propAddress=(m_ins.operands[0].value&0xFFFF)-1;
-				int sizeId=memory[propAddress]&0xFF;
+				int sizeId=ReadMemory(propAddress)&0xFF;
 				int size=(sizeId>>5)+1;
 				setVariable(m_ins.store, size);
 				break;
@@ -968,7 +987,7 @@ void process2OPInstruction()
 		case 6: //jin
 			{
 				ZObject child=getObject(m_ins.operands[0].value);
-				doBranch((memory[child.addr+4]&0xFF)==m_ins.operands[1].value, m_ins.branch);
+				doBranch((ReadMemory(child.addr+4)&0xFF)==m_ins.operands[1].value, m_ins.branch);
 				break;
 			}
 		case 7: //test
@@ -989,7 +1008,7 @@ void process2OPInstruction()
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				doBranch((memory[obj.addr+offset]&bit)==bit, m_ins.branch);
+				doBranch((ReadMemory(obj.addr+offset)&bit)==bit, m_ins.branch);
 				break;
 			}
 		case 0xB: //set_attr
@@ -998,7 +1017,7 @@ void process2OPInstruction()
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				memory[obj.addr+offset]|=bit;
+				SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)|bit);
 				break;
 			}
 		case 0xC: //clear_attr
@@ -1007,7 +1026,7 @@ void process2OPInstruction()
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				memory[obj.addr+offset]&=~bit;
+				SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)&~bit);
 				break;
 			}
 		case 0xD: //store
@@ -1022,13 +1041,13 @@ void process2OPInstruction()
 		case 0xF: //loadw
 			{
 				int address=((m_ins.operands[0].value&0xFFFF)+2*(m_ins.operands[1].value&0xFFFF));
-				setVariable(m_ins.store, makeS16(memory[address]&0xFF, memory[address+1]&0xFF));
+				setVariable(m_ins.store, makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF));
 				break;
 			}
 		case 0x10: //loadb
 			{
 				int address=((m_ins.operands[0].value&0xFFFF)+(m_ins.operands[1].value&0xFFFF));
-				setVariable(m_ins.store, memory[address]&0xFF);
+				setVariable(m_ins.store, ReadMemory(address)&0xFF);
 				break;
 			}
 		case 0x11: //get_prop
@@ -1037,11 +1056,11 @@ void process2OPInstruction()
 				ZProperty prop=getProperty(obj, m_ins.operands[1].value);
 				if (prop.size==1)
 				{
-					setVariable(m_ins.store, memory[prop.addr]&0xFF);
+					setVariable(m_ins.store, ReadMemory(prop.addr)&0xFF);
 				}
 				else if (prop.size==2)
 				{
-					setVariable(m_ins.store, makeS16(memory[prop.addr]&0xFF, memory[prop.addr+1]&0xFF));
+					setVariable(m_ins.store, makeS16(ReadMemory(prop.addr)&0xFF, ReadMemory(prop.addr+1)&0xFF));
 				}
 				else
 				{
@@ -1065,9 +1084,9 @@ void process2OPInstruction()
 				if (m_ins.operands[1].value==0)
 				{
 					int address=obj.propTable;
-					int textLen=memory[address++]&0xFF;
+					int textLen=ReadMemory(address++)&0xFF;
 					address+=textLen*2;
-					int nextSizeId=memory[address]&0xFF;
+					int nextSizeId=ReadMemory(address)&0xFF;
 					setVariable(m_ins.store, nextSizeId&31);
 				}
 				else
@@ -1079,7 +1098,7 @@ void process2OPInstruction()
 					}
 					else
 					{
-						int nextSizeId=memory[prop.addr+prop.size]&0xFF;
+						int nextSizeId=ReadMemory(prop.addr+prop.size)&0xFF;
 						setVariable(m_ins.store, nextSizeId&31);
 					}
 				}
@@ -1131,15 +1150,15 @@ void processVARInstruction()
 			{
 				int address=((m_ins.operands[0].value&0xFFFF)+2*(m_ins.operands[1].value&0xFFFF));
 				int value=m_ins.operands[2].value;
-				memory[address]=(byte)((value>>8)&0xFF);
-				memory[address+1]=(byte)(value&0xFF);
+				SetMemory(address, (byte)((value>>8)&0xFF));
+				SetMemory(address+1, (byte)(value&0xFF));
 				break;
 			}
 		case 2: //storeb
 			{
 				int address=((m_ins.operands[0].value&0xFFFF)+(m_ins.operands[1].value&0xFFFF));
 				int value=m_ins.operands[2].value;
-				memory[address]=(byte)(value&0xFF);
+				SetMemory(address, (byte)(value&0xFF));
 				break;
 			}
 		case 3: //put_prop
@@ -1150,12 +1169,12 @@ void processVARInstruction()
 				{
 					if (prop.size==1)
 					{
-						memory[prop.addr]=(byte)(m_ins.operands[2].value&0xFF);
+						SetMemory(prop.addr, (byte)(m_ins.operands[2].value&0xFF));
 					}
 					else if (prop.size==2)
 					{
-						memory[prop.addr+0]=(byte)((m_ins.operands[2].value>>8)&0xFF);
-						memory[prop.addr+1]=(byte)(m_ins.operands[2].value&0xFF);
+						SetMemory(prop.addr+0, (byte)((m_ins.operands[2].value>>8)&0xFF));
+						SetMemory(prop.addr+1, (byte)(m_ins.operands[2].value&0xFF));
 					}
 				}
 				else
@@ -1166,11 +1185,11 @@ void processVARInstruction()
 			}
 		case 4: //sread
 			{
-				static char input[4096];
+				static char input[256];
 				int bufferAddr=m_ins.operands[0].value;
 				int parseAddr=m_ins.operands[1].value;
-				int maxLength=memory[bufferAddr++]&0xFF;
-				int maxParse=memory[parseAddr++]&0xFF;
+				int maxLength=ReadMemory(bufferAddr++)&0xFF;
+				int maxParse=ReadMemory(parseAddr++)&0xFF;
 				int realInLen=0;
 				int inLen;
 				int i;
@@ -1181,12 +1200,12 @@ void processVARInstruction()
 					if (input[i]!='\r' && input[i]!='\n')
 					{
 						input[realInLen++]=tolower((int)input[i]);
-						memory[bufferAddr++]=(byte)input[i];
+						SetMemory(bufferAddr++,(byte)input[i]);
 					}
 				}
 				input[realInLen]='\0';
-				memory[bufferAddr++]=0;
-				memory[parseAddr]=(byte)lexicalAnalysis(input, parseAddr+1, maxParse);
+				SetMemory(bufferAddr++,0);
+				SetMemory(parseAddr,(byte)lexicalAnalysis(input, parseAddr+1, maxParse));
 				break;
 			}
 		case 5: //print_char
@@ -1329,18 +1348,28 @@ void executeInstruction()
 
 void zopsMain(char* GameData)
 {
+	byte Flags = 0;
+
 	memory = GameData;
-	ASSERT(memory[0] == 3);
-	m_globalVariables = makeU16(memory[0xC] & 0xFF, memory[0xD] & 0xFF);
-	m_abbrevTable = makeU16(memory[0x18] & 0xFF, memory[0x19] & 0xFF);
-	m_objectTable = makeU16(memory[0xA] & 0xFF, memory[0xB] & 0xFF);
-	m_dictionaryTable = makeU16(memory[0x8] & 0xFF, memory[0x9] & 0xFF);
-	m_pc = makeU16(memory[6] & 0xFF, memory[7] & 0xFF);
-	memory[1] |= (1 << 4);	  // status line not available
-	memory[1] &= ~(1 << 5);	  // screen splitting available
-	memory[1] &= ~(1 << 6);	  // variable pitch font
-	memory[0x10] |= (1 << 0); // transcripting
-	memory[0x10] |= (1 << 1); // fixed font
+	m_endOfDynamic = makeU16(memory[0xE] & 0xFF, memory[0xF] & 0xFF);
+	dynamic = malloc(m_endOfDynamic);
+	memcpy(dynamic, memory, m_endOfDynamic);
+
+	ASSERT(ReadMemory(0) == 3);
+	m_globalVariables = makeU16(ReadMemory(0xC) & 0xFF, ReadMemory(0xD) & 0xFF);
+	m_abbrevTable = makeU16(ReadMemory(0x18) & 0xFF, ReadMemory(0x19) & 0xFF);
+	m_objectTable = makeU16(ReadMemory(0xA) & 0xFF, ReadMemory(0xB) & 0xFF);
+	m_dictionaryTable = makeU16(ReadMemory(0x8) & 0xFF, ReadMemory(0x9) & 0xFF);
+	m_pc = makeU16(ReadMemory(6) & 0xFF, ReadMemory(7) & 0xFF);
+	Flags = ReadMemory(1);
+	Flags |= (1 << 4);	// status line not available
+	Flags &= ~(1 << 5); // screen splitting available
+	Flags &= ~(1 << 6); // variable pitch font
+	SetMemory(1, Flags);
+	Flags = ReadMemory(0x10);
+	Flags |= (1 << 0); // transcripting
+	Flags |= (1 << 1); // fixed font
+	SetMemory(0x10, Flags);
 	stackInit(&m_stack, m_numberstack, sizeof(m_numberstack[0]), ARRAY_SIZEOF(m_numberstack));
 	stackInit(&m_callStack, m_callstackcontents, sizeof(m_callstackcontents[0]), ARRAY_SIZEOF(m_callstackcontents));
 	while (1)
