@@ -157,9 +157,39 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
     }
     if (Packet.bSDLCValid)
     {
+        if (Packet.SDLC.bRecieveCountValid)
+        {
+            // Recieve count should match next send count
+            if (Packet.SDLC.RecieveCount != (Stream.SendCount & 7))
+            {
+                // Not got last message so resend?
+                printf("RecvCount (%d) != SendCount (%d) so resending last message (%d:%d:%d)\n", Packet.SDLC.RecieveCount, Stream.SendCount & 7, State, CurrentLine, bSendReadyToRecieve);
+                if (bSendReadyToRecieve)
+                {
+                    // Just sent something. See if that fixes it first
+                    return;
+                }
+                Stream.SendCount--;
+                if (CurrentLine > 0)
+                {
+                    CurrentLine -= 3;
+                }
+                else if (State == StateWaitForInput)
+                {
+                    State = StateSendScreen;
+                    CurrentLine = 24;
+                }
+                else if (State != StateRespond)
+                {
+                    State = (EState)(State - 1);
+                }
+                return;
+            }
+        }
         if (Packet.SDLC.bSendCountValid)
         {
-            Stream.SetRecieveCount(Packet.SDLC.RecieveCount);
+            // Recieved a numbered packet so increase recieve count
+            Stream.IncreaseRecieveCount();
         }
     }
     if (Packet.bRequestValid && Packet.Req.bChangeDirection)

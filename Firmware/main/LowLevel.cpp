@@ -260,7 +260,7 @@ void MessageTask(void *pvParameters)
 
 				PacketParser ProcessedPacket;
 				ProcessedPacket.Parse(PacketData, LengthOfPacket);
-				ProcessedPacket.Dump(PacketData);
+				//ProcessedPacket.Dump(PacketData);
 				
 				Network.ProcessPacket(ProcessedPacket, PacketData);
 			}
@@ -375,11 +375,11 @@ void IRAM_ATTR SendTask(void *pvParameters)
 	InitializeGPIO();
 	InitializeSPI();	
 
-	uint8_t Flags[16]; // Needs to fill at least 1ms. 16 bytes is about 13ms at 9600 baud
+	uint8_t Flags[4]; // Needs to fill at least 1ms. 4 bytes is about 1.5ms at 192000 baud
 	memset(Flags, 0x7E, sizeof(Flags));
 			
 	spi_slave_transaction_t FlagsTransaction = {};
-	FlagsTransaction.length = sizeof(Flags);
+	FlagsTransaction.length = sizeof(Flags) * 8;
 	FlagsTransaction.tx_buffer = Flags;
 	FlagsTransaction.rx_buffer = nullptr;
 
@@ -434,7 +434,7 @@ void InitializeClock()
 
 	ledc_timer_config_t ledc_time_config = {};
 	ledc_time_config.duty_resolution = LEDC_TIMER_2_BIT;
-	ledc_time_config.freq_hz = 9600;
+	ledc_time_config.freq_hz = 19200;
 	ledc_time_config.speed_mode = LEDC_HIGH_SPEED_MODE;
 	ledc_time_config.timer_num = LEDC_TIMER_0;
     

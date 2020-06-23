@@ -15,7 +15,7 @@ void PacketParser::Parse(const uint8_t *PacketData, int PacketSize)
     PacketSize -= 2;        // Drop CRC
     
     EndOfData = PacketSize; // Ignore CRC, already checked
-    if (PacketSize > 2)
+    if (PacketSize >= 2)
     {
         bSDLCValid = true;
         SDLC.Address = PacketData[0];

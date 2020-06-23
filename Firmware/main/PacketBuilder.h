@@ -52,9 +52,9 @@ private:
 class SDLCInfoStream : public RawStream
 {
 public:
-	void SetRecieveCount(uint8_t NewCount)
+	void IncreaseRecieveCount()
 	{
-		RecieveCount = NewCount;
+		RecieveCount++;
 	}
 
 	uint8_t RecieveCount = 0;
