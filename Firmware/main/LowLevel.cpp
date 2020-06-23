@@ -30,14 +30,15 @@ extern volatile bool bDoneQuitTask2;
 
 static xQueueHandle SendEventQueue = nullptr;
 static TaskHandle_t RecvTask = nullptr;
-static uint8_t RecvRingBuff[RING_BUF_SIZE];
-static uint32_t RecvCurrentByte = 0;
-static uint32_t RingBufIndex = 0;
-static uint32_t RunCount = 0;
-static uint32_t StartPacket = INVALID_PACKET;
-static xQueueHandle RecvEventQueue = NULL;
 static const char *LogTag = "informer";
 static NetworkState Network;
+
+static DRAM_ATTR uint8_t RecvRingBuff[RING_BUF_SIZE];
+static DRAM_ATTR uint32_t RecvCurrentByte = 0;
+static DRAM_ATTR uint32_t RingBufIndex = 0;
+static DRAM_ATTR uint32_t RunCount = 0;
+static DRAM_ATTR uint32_t StartPacket = INVALID_PACKET;
+static DRAM_ATTR xQueueHandle RecvEventQueue = NULL;
 
 struct PacketToSend
 {
@@ -211,12 +212,12 @@ void MessageTask(void *pvParameters)
 		bool bWaitForReply = false;
 		int SendSize = Network.GenerateNewPackets(SendBuffer, bWaitForReply);
 		
-		printf("Sending packet of size %d:", SendSize);
+		/*printf("Sending packet of size %d:", SendSize);
 		for (int i=0; i<SendSize; i++)
 		{
 			printf(" %02x", SendBuffer[i]);
 		}
-		printf("\n");
+		printf("\n");*/
 
 		CBitStream A(SendBuffer, SendSize);
 		CBitStream B;
@@ -250,12 +251,12 @@ void MessageTask(void *pvParameters)
 					PacketData[PacketIndex] = RecvRingBuff[(Packet[0]++) & RING_BUF_MASK];
 				}
 				
-                printf("Recieved packet of length %d:", LengthOfPacket);
+                /*printf("Recieved packet of length %d:", LengthOfPacket);
 				for (int i=0; i<LengthOfPacket; i++)
 				{
 					printf(" %02x", PacketData[i]);
 				}
-				printf("\n");
+				printf("\n");*/
 
 				PacketParser ProcessedPacket;
 				ProcessedPacket.Parse(PacketData, LengthOfPacket);
@@ -283,8 +284,8 @@ void MessageTask(void *pvParameters)
 // Low level recieve
 IRAM_ATTR void RecvCallback(void* UserData)
 {
-	bool bBit = gpio_get_level(IN_SDLCRECV2);
-			
+    bool bBit ((GPIO.in & (1 << IN_SDLCRECV2)) != 0);
+
 	if (bBit)
 	{
 		RunCount++;
@@ -326,6 +327,24 @@ IRAM_ATTR void RecvCallback(void* UserData)
 	}
 }
 
+void InitializeGPIO()
+{
+	gpio_config_t io_conf;
+	io_conf.intr_type = GPIO_INTR_DISABLE;
+	io_conf.mode = GPIO_MODE_INPUT;
+	io_conf.pin_bit_mask = BIT(IN_SDLCRECV2);
+	io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+	io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+	gpio_config(&io_conf);
+
+	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
+
+	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
+	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_POSEDGE); // TODO: Might be negative edge (change with SPI mode)
+	gpio_intr_enable(IN_SDLCCLOCK);
+}
+
 // Low level send
 void InitializeSPI()
 {
@@ -348,14 +367,15 @@ void InitializeSPI()
 	spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, 2);
 }
 
-void SendTask(void *pvParameters)
+void IRAM_ATTR SendTask(void *pvParameters)
 {
     // Sends flags unless we have a message to send. Done via SPI
 	ESP_LOGI(LogTag, "SendTask started\n");
 
+	InitializeGPIO();
 	InitializeSPI();	
 
-	uint8_t Flags[32]; // Needs to fill at least 1ms. 32 bytes is about 50ms at 4800 baud
+	uint8_t Flags[16]; // Needs to fill at least 1ms. 16 bytes is about 13ms at 9600 baud
 	memset(Flags, 0x7E, sizeof(Flags));
 			
 	spi_slave_transaction_t FlagsTransaction = {};
@@ -422,24 +442,6 @@ void InitializeClock()
     ledc_channel_config(&ledc_ch_config);
 }
 
-void InitializeGPIO()
-{
-	gpio_config_t io_conf;
-	io_conf.intr_type = GPIO_INTR_DISABLE;
-	io_conf.mode = GPIO_MODE_INPUT;
-	io_conf.pin_bit_mask = BIT(IN_SDLCRECV2);
-	io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-	io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-	gpio_config(&io_conf);
-
-	gpio_install_isr_service(0);//ESP_INTR_FLAG_IRAM);
-	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
-
-	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
-	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_NEGEDGE); // TODO: Might be negative edge (change with SPI mode)
-	gpio_intr_enable(IN_SDLCCLOCK);
-}
-
 void CreateSendRecieveTasks()
 {
 	BuildCRCLookup();
@@ -449,7 +451,6 @@ void CreateSendRecieveTasks()
 	RecvEventQueue = xQueueCreate(16, 2 * sizeof(uint32_t));
 	
     InitializeClock();
-	InitializeGPIO();
 
 	xTaskCreatePinnedToCore(&MessageTask, "MessageTask", 2*8192, NULL, 5, &RecvTask, 0);
 	xTaskCreatePinnedToCore(&SendTask, "SendTask", 8192, NULL, 5, NULL, 1);

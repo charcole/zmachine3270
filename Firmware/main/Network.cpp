@@ -96,13 +96,14 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
 
             if (CurrentLine < 24)
             {
+                int NumLines = 3;
                 char ScreenData[80 * 24];
                 GScreen.SerializeScreen3270(ScreenData);
-                for (int ScreenIndex = 0; ScreenIndex < 80 * 2; ScreenIndex++)
+                for (int ScreenIndex = 0; ScreenIndex < 80 * NumLines; ScreenIndex++)
                 {
                     DataStream3270.SendData(ScreenData[80 * CurrentLine + ScreenIndex]);
                 }
-                CurrentLine += 2;
+                CurrentLine += NumLines;
             }
             else
             {
