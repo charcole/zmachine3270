@@ -92,7 +92,17 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
             ScreenAddress |= 0x4040;
 
             RequestPacket DataStream3270(Stream, 0, 2, 1);
-            DataStream3270.SendData({0xF1, 0xD3, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress)});//, 0x1D, 0xF0});
+            uint8_t WCC = 0x80;
+            if (CurrentLine == 0)
+            {
+                WCC |= 0x40; // Reset partions
+                WCC |= 0x01; // Reset modified data tag
+            }
+            else if (CurrentLine == 24)
+            {
+                WCC |= 0x02; // Keyboard restore
+            }
+            DataStream3270.SendData({0xF1, WCC, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress)});//, 0x1D, 0xF0});
 
             if (CurrentLine < 24)
             {
@@ -166,7 +176,8 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
                 printf("RecvCount (%d) != SendCount (%d) so resending last message (%d:%d:%d)\n", Packet.SDLC.RecieveCount, Stream.SendCount & 7, State, CurrentLine, bSendReadyToRecieve);
                 if (bSendReadyToRecieve)
                 {
-                    // Just sent something. See if that fixes it first
+                    // Just sent something. Shouldn't be recieving anything yet.
+                    // Hasn't processed what we just sent yet or we're out of sync?
                     return;
                 }
                 Stream.SendCount--;
@@ -202,17 +213,25 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
                 //Stream.SetSequence(Packet.FID2.Sequence + 1);
                 ProcessedPacket = Packet.FID2.Sequence;
 
-                char InputString[128];
-                if (Packet.EndOfData - Packet.StartOfData - 6 < sizeof(InputString) - 1)
+                if (Data[Packet.StartOfData] == 0x7D) // ENTER key
                 {
-                    char *Input = InputString;
-                    for (int TextIndex = Packet.StartOfData + 6; TextIndex < Packet.EndOfData; TextIndex++)
+                    char InputString[128];
+                    if (Packet.EndOfData - Packet.StartOfData - 6 < sizeof(InputString) - 1)
                     {
-                        *(Input++) = EBCDICToASCII[Data[TextIndex]];
+                        int DataOffset = Packet.StartOfData + 3; // Skip AID and cursor address
+                        if (Data[DataOffset] == 0x11) // Set Buffer Address always seems to follow
+                        {
+                            DataOffset += 3; // SBA + Address
+                            char *Input = InputString;
+                            for (int TextIndex = DataOffset; TextIndex < Packet.EndOfData; TextIndex++)
+                            {
+                                *(Input++) = EBCDICToASCII[Data[TextIndex]];
+                            }
+                            *(Input++) = '\0';
+                            printf("Input: %s\n", InputString);
+                            GScreen.ProvideInput(InputString);
+                        }
                     }
-                    *(Input++) = '\0';
-                    printf("Input: %s\n", InputString);
-                    GScreen.ProvideInput(InputString);
                 }
             }
         }

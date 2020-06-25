@@ -51,6 +51,7 @@ void Screen::ReadInput(char* Input, int MaxLength)
     TaskHandle = xTaskGetCurrentTaskHandle();
     bSuspended = true;
     ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+    Print(' ');
     Print(Input);
     Print('\n');
 }

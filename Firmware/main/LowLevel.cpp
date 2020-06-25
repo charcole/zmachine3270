@@ -20,7 +20,7 @@ extern "C"
 #define IN_SDLCRECV				(GPIO_NUM_26)
 #define IN_SDLCRECV2			(GPIO_NUM_25)
 
-#define RING_BUF_SIZE	1024 // Should give almost 2 seconds buffering
+#define RING_BUF_SIZE	1024 // Should give almost 0.5 seconds buffering at 19200
 #define RING_BUF_MASK	(RING_BUF_SIZE-1)
 #define INVALID_PACKET	~0u
 
@@ -341,7 +341,7 @@ void InitializeGPIO()
 	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
 
 	gpio_set_pull_mode(IN_SDLCCLOCK, GPIO_PULLUP_ONLY);
-	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_POSEDGE); // TODO: Might be negative edge (change with SPI mode)
+	gpio_set_intr_type(IN_SDLCCLOCK, GPIO_INTR_POSEDGE); // Stable on falling edge RS232 so pos edge digital
 	gpio_intr_enable(IN_SDLCCLOCK);
 }
 
@@ -354,7 +354,7 @@ void InitializeSPI()
 	buscfg.sclk_io_num = IN_SDLCCLOCK;
 
 	spi_slave_interface_config_t slvcfg = {};
-	slvcfg.mode = 0; // TODO: Might be 1. Seems to work either way
+	slvcfg.mode = 1; // Wikipedia says RX clocking is opposite edge to TX so should be falling edge (rising edge RS232)
 	slvcfg.spics_io_num = IN_SDLCREADY;
 	slvcfg.queue_size = 2; // Make sure we can have a flags transaction in flight at all times
 	slvcfg.flags = SPI_SLAVE_BIT_LSBFIRST;
@@ -434,7 +434,7 @@ void InitializeClock()
 
 	ledc_timer_config_t ledc_time_config = {};
 	ledc_time_config.duty_resolution = LEDC_TIMER_2_BIT;
-	ledc_time_config.freq_hz = 19200;
+	ledc_time_config.freq_hz = 38400;
 	ledc_time_config.speed_mode = LEDC_HIGH_SPEED_MODE;
 	ledc_time_config.timer_num = LEDC_TIMER_0;
     
