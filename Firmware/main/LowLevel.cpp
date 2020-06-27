@@ -19,6 +19,7 @@ extern "C"
 #define IN_SDLCREADY			(GPIO_NUM_27)
 #define IN_SDLCRECV				(GPIO_NUM_26)
 #define IN_SDLCRECV2			(GPIO_NUM_25)
+#define IN_SDLCRTR				(GPIO_NUM_33)
 
 #define RING_BUF_SIZE	1024 // Should give almost 0.5 seconds buffering at 19200
 #define RING_BUF_MASK	(RING_BUF_SIZE-1)
@@ -337,6 +338,9 @@ void InitializeGPIO()
 	io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
 	gpio_config(&io_conf);
 
+	io_conf.pin_bit_mask = BIT64(IN_SDLCRTR);
+	gpio_config(&io_conf);
+
 	gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
 	gpio_isr_handler_add(IN_SDLCCLOCK, RecvCallback, nullptr);
 
@@ -385,6 +389,11 @@ void IRAM_ATTR SendTask(void *pvParameters)
 
 	while (!bQuitTasks)
 	{
+		if (!gpio_get_level(IN_SDLCRTR))
+		{
+			spi_slave_queue_trans(HSPI_HOST, &FlagsTransaction, portMAX_DELAY);
+			continue;
+		}
 		PacketToSend Packet;
 		if (xQueueReceive(SendEventQueue, &Packet, 0))
 		{

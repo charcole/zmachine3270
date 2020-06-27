@@ -472,10 +472,6 @@ $EndComp
 Wire Wire Line
 	2350 1800 2200 1800
 Connection ~ 2200 1800
-Wire Wire Line
-	3550 3700 3800 3700
-Wire Wire Line
-	3800 3700 3800 4000
 $Comp
 L Device:R R3
 U 1 1 5F041099
@@ -506,7 +502,7 @@ NoConn ~ 3550 3300
 NoConn ~ 3550 3400
 NoConn ~ 3550 3600
 NoConn ~ 3550 3800
-NoConn ~ 3550 3900
+NoConn ~ 3550 3700
 NoConn ~ 3550 4000
 NoConn ~ 3550 4100
 NoConn ~ 2350 3500
@@ -693,4 +689,8 @@ Wire Wire Line
 Wire Wire Line
 	7700 1350 7600 1350
 Connection ~ 7600 1350
+Wire Wire Line
+	3550 3900 3800 3900
+Wire Wire Line
+	3800 3900 3800 4000
 $EndSCHEMATC
