@@ -20,7 +20,9 @@ enum
     ResetCharacterAttributes = 0x00,   // Not supported
     SetAttributeExtended = 0x29,       // Not supported
     ExtendedHighlightAttribute = 0x41, // Not supported
-    HighlightReverseVideo = 0xF2       // Not supported
+    HighlightReverseVideo = 0xF2,      // Not supported
+
+    NUL = 0x00
 };
 
 Screen GScreen;
@@ -48,13 +50,52 @@ void Screen::Print(char Char)
     {
         if (Char == '\n')
         {
+            bWordwrap = false;
             ConditionalScroll();
         }
         return;
     }
+    if (bWordwrap)
+    {
+        bWordwrap = false;
+        if (Char == ' ')
+        {
+            return;
+        }
+        else
+        {
+            int LastRow = CursorRow - 1;
+            if (LastRow < 0)
+            {
+                LastRow += NUM_ROWS;
+            }
+            int LastCol = NUM_COLS - 1;
+            int MaxLookback = NUM_COLS / 2;
+            while (LastCol > MaxLookback && Row[LastRow].Col[LastCol] != ' ')
+            {
+                LastCol--;
+            }
+            if (LastCol > MaxLookback)
+            {
+                LastCol++;
+                while (LastCol < NUM_COLS)
+                {
+                    Row[CursorRow].Col[CursorCol++] = Row[LastRow].Col[LastCol];
+                    Row[LastRow].Col[LastCol++] = ' ';
+                }
+            }
+            else
+            {
+                int LastCol = NUM_COLS - 1;
+                Row[CursorRow].Col[CursorCol++] = Row[LastRow].Col[LastCol];
+                Row[LastRow].Col[LastCol] = '-';
+            }
+        }
+    }
     Row[CursorRow].Col[CursorCol++] = Char;
     if (CursorCol >= NUM_COLS)
     {
+        bWordwrap = (Char != ' ');
         ConditionalScroll();
     }
 }
@@ -172,7 +213,7 @@ int Screen::SerializeScreen3270()
                 *(Data++) = SetCursor;
                 *(Data++) = RepeatToAddress;
                 AddScreenAddress(Data, NUM_COLS - 1, Line);
-                *(Data++) = 0; // NUL
+                *(Data++) = NUL;
                 *(Data++) = StartField;
                 *(Data++) = ProtectedField;
             }
@@ -215,6 +256,7 @@ void Screen::GetCursorPosition(int& X, int& Y)
 
 void Screen::SetCursorPosition(int X, int Y)
 {
+    bWordwrap = false;
     CursorCol = X;
     CursorRow = Y + TopLine;
     if (CursorRow >= NUM_ROWS)

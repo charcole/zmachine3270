@@ -53,6 +53,7 @@ private:
     int TopLine = 0;
     int CursorRow = 0;
     int CursorCol = 0;
+    bool bWordwrap = false;
 
     volatile char* WaitingInput = nullptr;
     volatile TaskHandle_t TaskHandle;
