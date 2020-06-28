@@ -19,9 +19,15 @@ extern "C"
 #include "lwip/sockets.h"
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
+#include "esp_vfs.h"
+#include "esp_vfs_fat.h"
 };
 #include "webpage.h"
 #include "zops.h"
+
+#ifndef CONFIG_WL_SECTOR_SIZE
+#define CONFIG_WL_SECTOR_SIZE 4096
+#endif
 
 #define ARRAY_NUM(x) (sizeof(x)/sizeof(x[0]))
 
@@ -32,6 +38,8 @@ extern "C"
 
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
+
+static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 struct Configuration
 {
@@ -351,6 +359,25 @@ void GameTask(void *pvParameters)
 	zopsMain(Game);
 }
 
+void MountFAT()
+{
+	ESP_LOGI(TAG, "Mounting FAT filesystem");
+    esp_vfs_fat_mount_config_t mount_config;
+	mount_config.max_files = 16;
+	mount_config.format_if_mount_failed = true;
+	mount_config.allocation_unit_size = CONFIG_WL_SECTOR_SIZE;
+	esp_err_t err = esp_vfs_fat_spiflash_mount("/spiflash", "storage", &mount_config, &s_wl_handle);
+	if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to mount FATFS (%s)", esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGE(TAG, "Mounted FATFS at /spiflash");
+
+	FILE* f=fopen("test.txt", "wb");
+	fwrite("hello", 5, 1, f);
+	fclose(f);
+}
+
 extern "C" void app_main(void)
 {
 	//Initialize NVS
@@ -369,6 +396,8 @@ extern "C" void app_main(void)
 	{
 		ClearSettings();
 	}
+
+	MountFAT();
 
 	printf("Waiting for connection to the wifi network...\n ");
 	xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);

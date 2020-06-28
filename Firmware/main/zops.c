@@ -134,7 +134,9 @@ typedef struct ZCallStack_s
 {
 	int returnAddr;
 	int returnStore;
-	s16 locals[16];
+	char setArguments;
+	char numLocals;
+	s16 locals[15];
 	int depth;
 } ZCallStack;
 
@@ -464,6 +466,8 @@ void callRoutine(int address, int returnStore, int setOperands)
 		ZCallStack cs;
 		cs.returnAddr=m_pc;
 		cs.returnStore=returnStore;
+		cs.setArguments=(setOperands?(1<<(m_ins.numOps-1))-1:0);
+		cs.numLocals=numLocals;
 		for (i=0; i<numLocals; i++)
 		{
 			cs.locals[i]=makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF);
@@ -553,6 +557,7 @@ int printText(int address)
 				if (characters[i]==6 && alphabet==2)
 				{
 					longNext=2;
+					alphabet=0;
 				}
 				else if (characters[i]>=6)
 				{
@@ -834,6 +839,277 @@ void updateStatus()
 	ScreenSetCursor(CursorX, CursorY);
 }
 
+char* saveDynamicMemory(char* Data)
+{
+	int ZeroRun = 0;
+	for (int i=0; i<m_endOfDynamic; i++)
+	{
+		uint8_t Diff = memory[i] ^ dynamic[i];
+		if (Diff == 0)
+		{
+			ZeroRun++;
+		}
+		else
+		{
+			while (ZeroRun > 0)
+			{
+				int Step = ZeroRun;
+				if (Step > 256)
+				{
+					Step = 256;
+				}
+				*(Data++) = 0;
+				*(Data++) = Step - 1;
+				ZeroRun -= Step;
+			}
+			*(Data++) = Diff;
+		}
+	}
+	return Data;
+}
+
+char* saveStacks(char* Data)
+{
+	int NumStacks = stackDepth(&m_callStack);
+	for (int i=0; i<NumStacks; i++)
+	{
+		ZCallStack* Callstack = &m_callstackcontents[i];
+		int NextNumberStackDepth = (i + 1) < NumStacks ? m_callstackcontents[i+1].depth : stackDepth(&m_stack);
+		*(Data++) = Callstack->returnAddr >> 16;
+		*(Data++) = Callstack->returnAddr >> 8;
+		*(Data++) = Callstack->returnAddr;
+		*(Data++) = Callstack->numLocals & 0x0F;
+		*(Data++) = Callstack->returnStore;
+		*(Data++) = Callstack->setArguments;
+		*(Data++) = (NextNumberStackDepth - Callstack->depth) >> 8;
+		*(Data++) = (NextNumberStackDepth - Callstack->depth);
+		for (int s=0; s<Callstack->numLocals; s++)
+		{
+			*(Data++) = Callstack->locals[s] >> 8;
+			*(Data++) = Callstack->locals[s];
+		}
+		for (int s=Callstack->depth; s<NextNumberStackDepth; s++)
+		{
+			*(Data++) = m_numberstack[s] >> 8;
+			*(Data++) = m_numberstack[s];
+		}
+	}
+	return Data;
+}
+
+char* saveHeader(char* Data)
+{
+	// Seems weird but stored PC points at the branch part of the instruction
+	int storePC = m_pc - 1;
+	if (m_ins.branch.offset < 0 || m_ins.branch.offset > 63)
+	{
+		storePC--;
+	}
+	*(Data++) = ReadMemory(0x02);
+	*(Data++) = ReadMemory(0x03);
+	*(Data++) = ReadMemory(0x12);
+	*(Data++) = ReadMemory(0x13);
+	*(Data++) = ReadMemory(0x14);
+	*(Data++) = ReadMemory(0x15);
+	*(Data++) = ReadMemory(0x16);
+	*(Data++) = ReadMemory(0x17);
+	*(Data++) = ReadMemory(0x1C);
+	*(Data++) = ReadMemory(0x1D);
+	*(Data++) = storePC >> 16;
+	*(Data++) = storePC >> 8;
+	*(Data++) = storePC;
+	return Data;
+}
+
+char* saveState(char* Data)
+{
+	int ChunkSize;
+	char* FormChunkSizePtr;
+	
+	*(Data++) = 'F';
+	*(Data++) = 'O';
+	*(Data++) = 'R';
+	*(Data++) = 'M';
+	FormChunkSizePtr = Data;
+	Data += 4;
+	*(Data++) = 'I';
+	*(Data++) = 'F';
+	*(Data++) = 'Z';
+	*(Data++) = 'S';
+
+	{
+		char* ChunkSizePtr;
+
+		*(Data++) = 'I';
+		*(Data++) = 'F';
+		*(Data++) = 'h';
+		*(Data++) = 'd';
+		ChunkSizePtr = Data;
+		Data = saveHeader(Data + 4);
+		ChunkSize = Data - ChunkSizePtr - 4;
+		if (ChunkSize&1)
+			*(Data++) = 0;
+		*(ChunkSizePtr++) = ChunkSize >> 24;
+		*(ChunkSizePtr++) = ChunkSize >> 16;
+		*(ChunkSizePtr++) = ChunkSize >> 8;
+		*(ChunkSizePtr++) = ChunkSize;
+
+		*(Data++) = 'C';
+		*(Data++) = 'M';
+		*(Data++) = 'e';
+		*(Data++) = 'm';
+		ChunkSizePtr = Data;
+		Data = saveDynamicMemory(Data + 4);
+		ChunkSize = Data - ChunkSizePtr - 4;
+		if (ChunkSize&1)
+			*(Data++) = 0;
+		*(ChunkSizePtr++) = ChunkSize >> 24;
+		*(ChunkSizePtr++) = ChunkSize >> 16;
+		*(ChunkSizePtr++) = ChunkSize >> 8;
+		*(ChunkSizePtr++) = ChunkSize;
+
+		*(Data++) = 'S';
+		*(Data++) = 't';
+		*(Data++) = 'k';
+		*(Data++) = 's';
+		ChunkSizePtr = Data;
+		Data = saveStacks(Data + 4);
+		ChunkSize = Data - ChunkSizePtr - 4;
+		if (ChunkSize&1)
+			*(Data++) = 0;
+		*(ChunkSizePtr++) = ChunkSize >> 24;
+		*(ChunkSizePtr++) = ChunkSize >> 16;
+		*(ChunkSizePtr++) = ChunkSize >> 8;
+		*(ChunkSizePtr++) = ChunkSize;
+	}
+	
+	ChunkSize = Data - FormChunkSizePtr - 4;
+	if (ChunkSize&1)
+		*(Data++) = 0;
+	*(FormChunkSizePtr++) = ChunkSize >> 24;
+	*(FormChunkSizePtr++) = ChunkSize >> 16;
+	*(FormChunkSizePtr++) = ChunkSize >> 8;
+	*(FormChunkSizePtr++) = ChunkSize;
+
+	return Data;
+}
+
+int restoreState(unsigned char* Data, unsigned char* End)
+{
+	bool bFoundHeader=FALSE;
+	bool bFoundMem=FALSE;
+	bool bFoundStacks=FALSE;
+	char ChunkId[4];
+	int ChunkSize;
+	int i;
+	while (Data<End)
+	{
+		unsigned char* NextChunk;
+		unsigned char* ChunkEnd;
+		ChunkId[0]=*(Data++);
+		ChunkId[1]=*(Data++);
+		ChunkId[2]=*(Data++);
+		ChunkId[3]=*(Data++);
+		ChunkSize=*(Data++)<<24;
+		ChunkSize+=*(Data++)<<16;
+		ChunkSize+=*(Data++)<<8;
+		ChunkSize+=*(Data++);
+		ChunkEnd=Data+ChunkSize;
+		NextChunk = Data+((ChunkSize+1)&~1);
+		if (ChunkId[0]=='F' && ChunkId[1]=='O' && ChunkId[2]=='R' && ChunkId[3]=='M')
+		{
+			ChunkId[0]=*(Data++);
+			ChunkId[1]=*(Data++);
+			ChunkId[2]=*(Data++);
+			ChunkId[3]=*(Data++);
+			if (ChunkId[0]=='I' && ChunkId[1]=='F' && ChunkId[2]=='Z' && ChunkId[3]=='S')
+			{
+				continue; // Want to read inner chunks so don't skip
+			}	
+		}
+		else if (ChunkId[0]=='I' && ChunkId[1]=='F' && ChunkId[2]=='h' && ChunkId[3]=='d')
+		{
+			// release number, serial number and checksum
+			int Locations[]={0x02, 0x03, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1C, 0x1D};
+			for (i=0; i<ARRAY_SIZEOF(Locations); i++)
+			{
+				if ((unsigned char)memory[Locations[i]]!=*(Data++))
+				{
+					return FALSE;
+				}
+			}
+			m_pc = *(Data++)<<16;
+			m_pc += *(Data++)<<8;
+			m_pc += *(Data++);
+			bFoundHeader=TRUE;
+		}
+		else if (ChunkId[0]=='C' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
+		{
+			char* DynamicData = dynamic;
+			memcpy(DynamicData,memory,m_endOfDynamic);
+			while (Data<ChunkEnd)
+			{
+				unsigned char Value=*(Data++);
+				if (Value==0x00)
+				{
+					int Length=*(Data++)+1;
+					DynamicData+=Length;
+				}
+				else
+				{
+					*(DynamicData++)^=Value;
+				}
+			}
+			bFoundMem=TRUE;
+		}
+		else if (ChunkId[0]=='U' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
+		{
+			memcpy(dynamic,Data,ChunkSize);
+			bFoundMem=TRUE;
+		}
+		else if (ChunkId[0]=='S' && ChunkId[1]=='t' && ChunkId[2]=='k' && ChunkId[3]=='s')
+		{
+			while (stackDepth(&m_stack))
+			{
+				stackPop(&m_stack);
+			}
+			while (stackDepth(&m_callStack))
+			{
+				stackPop(&m_callStack);
+			}
+			while (Data<ChunkEnd)
+			{
+				ZCallStack* CS=(ZCallStack*)stackPush(&m_callStack);
+				int StackDepth;
+				CS->returnAddr=*(Data++)<<16;
+				CS->returnAddr+=*(Data++)<<8;
+				CS->returnAddr+=*(Data++);
+				CS->numLocals=*(Data++)&0x0F;
+				CS->returnStore=*(Data++);
+				CS->setArguments=*(Data++);
+				CS->depth=stackDepth(&m_stack);
+				StackDepth=*(Data++)<<8;
+				StackDepth+=*(Data++);
+				for (int s=0; s<CS->numLocals; s++)
+				{
+					CS->locals[s]=makeS16(Data[0], Data[1]);
+					Data+=2;
+				}
+				while (StackDepth--)
+				{
+					*(s16*)stackPush(&m_stack)=makeS16(Data[0], Data[1]);
+					Data+=2;
+				}
+			}
+			bFoundStacks=TRUE;
+		}
+		Data=NextChunk;
+	}
+	return (bFoundHeader && bFoundMem && bFoundStacks);
+}
+			
+byte savedata[4096];
+
 void process0OPInstruction()
 {
 	switch (m_ins.op)
@@ -855,11 +1131,31 @@ void process0OPInstruction()
 		case 4: //nop
 			break;
 		case 5: //save
-			doBranch(FALSE, m_ins.branch);
-			break;
+			{
+				byte* end=saveState(savedata);
+				FILE *f = fopen("save.sav", "wb");
+				fwrite(savedata, end-savedata, 1, f);
+				fclose(f);
+				doBranch(TRUE, m_ins.branch);
+				break;
+			}
 		case 6: //restore
-			doBranch(FALSE, m_ins.branch);
-			break;
+			{
+				FILE *f = fopen("save.sav", "rb");
+				if (f)
+				{
+					int len=fread(savedata, 1, sizeof(savedata), f);
+					fclose(f);
+					if (restoreState((unsigned char*)savedata, (unsigned char*)savedata+len))
+					{
+						m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),m_ins.op);
+						doBranch(TRUE, m_ins.branch);
+						break;
+					}
+				}
+				doBranch(FALSE, m_ins.branch);
+				break;
+			}
 		case 7: //restart
 			haltInstruction();
 			break;
@@ -870,7 +1166,7 @@ void process0OPInstruction()
 			stackPop(&m_stack);
 			break;
 		case 0xA: //quit
-			haltInstruction();
+			exit(0);
 			break;
 		case 0xB: //new_line
 			ScreenPrintChar('\n');
