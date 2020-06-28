@@ -372,10 +372,6 @@ void MountFAT()
         return;
     }
     ESP_LOGE(TAG, "Mounted FATFS at /spiflash");
-
-	FILE* f=fopen("test.txt", "wb");
-	fwrite("hello", 5, 1, f);
-	fclose(f);
 }
 
 extern "C" void app_main(void)

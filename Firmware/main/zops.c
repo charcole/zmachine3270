@@ -1133,15 +1133,22 @@ void process0OPInstruction()
 		case 5: //save
 			{
 				byte* end=saveState(savedata);
-				FILE *f = fopen("save.sav", "wb");
-				fwrite(savedata, end-savedata, 1, f);
-				fclose(f);
-				doBranch(TRUE, m_ins.branch);
+				FILE *f = fopen("/spiflash/save.sav", "wb");
+				if (f)
+				{
+					fwrite(savedata, end - savedata, 1, f);
+					fclose(f);
+					doBranch(TRUE, m_ins.branch);
+				}
+				else
+				{
+					doBranch(FALSE, m_ins.branch);
+				}
 				break;
 			}
 		case 6: //restore
 			{
-				FILE *f = fopen("save.sav", "rb");
+				FILE *f = fopen("/spiflash/save.sav", "rb");
 				if (f)
 				{
 					int len=fread(savedata, 1, sizeof(savedata), f);
