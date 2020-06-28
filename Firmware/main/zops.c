@@ -801,6 +801,39 @@ int lexicalAnalysis(char* input, int parseBuffer, int maxEntries)
 	return MIN(maxEntries, numTokens);
 }
 
+void updateStatus()
+{
+	int objectId = readVariable(16);
+	int score = readVariable(17);
+	int turns = readVariable(18);
+	ZObject room = getObject(objectId);
+
+	int CursorX, CursorY, StatusX, StatusY;
+	char ScoreString[16];
+	ScreenGetCursor(&CursorX, &CursorY);
+	ScreenSetCursor(1, 0); // 1 as leftmost character used for character attribute
+	printText(room.propTable + 1);
+	ScreenGetCursor(&StatusX, &StatusY);
+	while (StatusX < 68)
+	{
+		ScreenPrintChar(' ');
+		StatusX++;
+	}
+	if (ReadMemory(1) & (1<<1)) // Time game
+	{
+		sprintf(ScoreString, "Time: %02d:%02d", score, turns);
+	}
+	else
+	{
+		if (score >= 0)
+			sprintf(ScoreString, "Score: %04d", score);
+		else
+			sprintf(ScoreString, "Score: %03d", score);
+	}
+	ScreenPrint(ScoreString);
+	ScreenSetCursor(CursorX, CursorY);
+}
+
 void process0OPInstruction()
 {
 	switch (m_ins.op)
@@ -843,7 +876,7 @@ void process0OPInstruction()
 			ScreenPrintChar('\n');
 			break;
 		case 0xC: //show_status
-			haltInstruction();
+			updateStatus();
 			break;
 		case 0xD: //verify
 			doBranch(TRUE, m_ins.branch);
@@ -1195,6 +1228,7 @@ void processVARInstruction()
 				int realInLen=0;
 				int inLen;
 				int i;
+				updateStatus();
 				ScreenReadInput(input, sizeof(input));
 				inLen=strlen(input);
 				for (i=0; i<inLen && i<maxLength; i++)
@@ -1368,7 +1402,7 @@ void zopsMain(const char* GameData)
 	m_dictionaryTable = makeU16(ReadMemory(0x8) & 0xFF, ReadMemory(0x9) & 0xFF);
 	m_pc = makeU16(ReadMemory(6) & 0xFF, ReadMemory(7) & 0xFF);
 	Flags = ReadMemory(1);
-	Flags |= (1 << 4);	// status line not available
+	//Flags |= (1 << 4);	// status line not available
 	Flags &= ~(1 << 5); // screen splitting available
 	Flags &= ~(1 << 6); // variable pitch font
 	SetMemory(1, Flags);
@@ -1378,6 +1412,7 @@ void zopsMain(const char* GameData)
 	SetMemory(0x10, Flags);
 	stackInit(&m_stack, m_numberstack, sizeof(m_numberstack[0]), ARRAY_SIZEOF(m_numberstack));
 	stackInit(&m_callStack, m_callstackcontents, sizeof(m_callstackcontents[0]), ARRAY_SIZEOF(m_callstackcontents));
+	ScreenPrintChar('\n');
 	while (1)
 	{
 		executeInstruction();

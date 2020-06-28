@@ -29,5 +29,6 @@ private:
 	SNAStream Stream;
 	uint16_t ProcessedPacket = 0xFFFF;
 	int CurrentLine = 0;
+	int Num3270Packets = 0;
 	bool bSendReadyToRecieve = false;
 };

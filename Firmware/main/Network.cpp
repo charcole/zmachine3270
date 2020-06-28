@@ -81,49 +81,21 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     case StateSendScreen:
     {
         {
-            uint16_t ScreenAddress = CurrentLine * 80;
-            int CurX = 0, CurY = 0;
-            if (CurrentLine >= 24)
-            {
-                GScreen.GetCursorPosition(CurX, CurY);
-                ScreenAddress = CurY * 80 + CurX;
-            }
-            ScreenAddress = ((ScreenAddress&0x0FC0) << 2) | (ScreenAddress & 0x3F);
-            ScreenAddress |= 0x4040;
-
-            RequestPacket DataStream3270(Stream, 0, 2, 1);
-            uint8_t WCC = 0x80;
             if (CurrentLine == 0)
             {
-                WCC |= 0x40; // Reset partions
-                WCC |= 0x01; // Reset modified data tag
+                Num3270Packets = GScreen.SerializeScreen3270();
             }
-            else if (CurrentLine == 24)
+            int PacketSize = 0;
+            const char* PacketData = GScreen.GetScreen3270Packet(CurrentLine++, PacketSize);
+            if (CurrentLine >= Num3270Packets)
             {
-                WCC |= 0x02; // Keyboard restore
-            }
-            DataStream3270.SendData({0xF1, WCC, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress)});//, 0x1D, 0xF0});
-
-            if (CurrentLine < 24)
-            {
-                int NumLines = 3;
-                char ScreenData[80 * 24];
-                GScreen.SerializeScreen3270(ScreenData);
-                for (int ScreenIndex = 0; ScreenIndex < 80 * NumLines; ScreenIndex++)
-                {
-                    DataStream3270.SendData(ScreenData[80 * CurrentLine + ScreenIndex]);
-                }
-                CurrentLine += NumLines;
-            }
-            else
-            {
-                ScreenAddress = CurY * 80 + 79;
-                ScreenAddress = ((ScreenAddress & 0x0FC0) << 2) | (ScreenAddress & 0x3F);
-                ScreenAddress |= 0x4040;
-
                 CurrentLine = 0;
-                DataStream3270.SendData({0x1D, 0x40, 0x13, 0x11, (uint8_t)(ScreenAddress >> 8), (uint8_t)(ScreenAddress), 0x1D, 0xF0});
                 State = StateWaitForInput;
+            }
+            RequestPacket DataStream3270(Stream, 0, 2, 1);
+            while (PacketSize--)
+            {
+                DataStream3270.SendData(*(PacketData++));
             }
         }
         bSendReadyToRecieve = true;
@@ -183,12 +155,12 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
                 Stream.SendCount--;
                 if (CurrentLine > 0)
                 {
-                    CurrentLine -= 3;
+                    CurrentLine--;
                 }
                 else if (State == StateWaitForInput)
                 {
                     State = StateSendScreen;
-                    CurrentLine = 24;
+                    CurrentLine = Num3270Packets - 1;
                 }
                 else if (State != StateRespond)
                 {

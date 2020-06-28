@@ -387,6 +387,11 @@ void IRAM_ATTR SendTask(void *pvParameters)
 	FlagsTransaction.tx_buffer = Flags;
 	FlagsTransaction.rx_buffer = nullptr;
 
+	// Make a pool of unique transactions so can't mistake old message for new send being done
+	constexpr int NumTransactions = 4;
+	spi_slave_transaction_t MsgTransactions[NumTransactions] = {};
+	int CurrentTransaction = 0;
+
 	while (!bQuitTasks)
 	{
 		if (!gpio_get_level(IN_SDLCRTR))
@@ -397,7 +402,8 @@ void IRAM_ATTR SendTask(void *pvParameters)
 		PacketToSend Packet;
 		if (xQueueReceive(SendEventQueue, &Packet, 0))
 		{
-			spi_slave_transaction_t MsgTransaction = {};
+			int TransactionNum = (CurrentTransaction++)&(NumTransactions-1);
+			spi_slave_transaction_t& MsgTransaction = MsgTransactions[TransactionNum];
 			MsgTransaction.length = Packet.NumBits;
 			MsgTransaction.tx_buffer = Packet.Data;
 			MsgTransaction.rx_buffer = nullptr;
