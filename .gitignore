@@ -2,5 +2,8 @@
 *.kicad_pcb-bak
 *.sch-bak
 *.zip
+*.bin
+*.old
+_autosave-*
 Firmware/Build/*
 .DS_Store
