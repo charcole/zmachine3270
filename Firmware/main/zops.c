@@ -165,6 +165,20 @@ typedef struct ZDictEntry_s
 	int current;
 } ZDictEntry;
 
+typedef struct SaveStream_s
+{
+	uint8_t buffer[1024];
+	uint8_t* ptr;
+	uint8_t* end;
+	int pos;
+	FILE* f;
+
+	int chunkSizeIdx;
+	int chunkSize[32];
+	int chunkStackIdx;
+	uint8_t chunkStack[16];
+} SaveStream;
+
 typedef char byte;
 
 static ZInstruction m_ins;
@@ -180,6 +194,7 @@ static s16 m_numberstack[256];
 static stack m_stack;
 static ZCallStack m_callstackcontents[96];
 static stack m_callStack;
+static SaveStream m_savestream;
 
 byte ReadMemory(int Address)
 {
@@ -839,7 +854,36 @@ void updateStatus()
 	ScreenSetCursor(CursorX, CursorY);
 }
 
-char* saveDynamicMemory(char* Data)
+void saveResetStream(SaveStream* stream)
+{
+	stream->ptr=stream->buffer;
+	stream->end=stream->ptr+sizeof(stream->buffer);
+	stream->pos=0;
+	stream->f=NULL;
+	stream->chunkSizeIdx=0;
+	stream->chunkStackIdx=0;
+}
+
+void saveFlush(SaveStream* stream)
+{
+	if (stream->f)
+	{
+		fwrite(stream->buffer,1,stream->ptr-stream->buffer,stream->f);
+	}
+	stream->ptr=stream->buffer;
+}
+
+void saveByte(SaveStream* stream, uint8_t data)
+{
+	*(stream->ptr++)=data;
+	stream->pos++;
+	if (stream->ptr>=stream->end)
+	{
+		saveFlush(stream);
+	}
+}
+
+void saveDynamicMemory(SaveStream* stream)
 {
 	int ZeroRun = 0;
 	for (int i=0; i<m_endOfDynamic; i++)
@@ -858,46 +902,44 @@ char* saveDynamicMemory(char* Data)
 				{
 					Step = 256;
 				}
-				*(Data++) = 0;
-				*(Data++) = Step - 1;
+				saveByte(stream, 0);
+				saveByte(stream, Step - 1);
 				ZeroRun -= Step;
 			}
-			*(Data++) = Diff;
+			saveByte(stream, Diff);
 		}
 	}
-	return Data;
 }
 
-char* saveStacks(char* Data)
+void saveStacks(SaveStream* stream)
 {
 	int NumStacks = stackDepth(&m_callStack);
 	for (int i=0; i<NumStacks; i++)
 	{
 		ZCallStack* Callstack = &m_callstackcontents[i];
 		int NextNumberStackDepth = (i + 1) < NumStacks ? m_callstackcontents[i+1].depth : stackDepth(&m_stack);
-		*(Data++) = Callstack->returnAddr >> 16;
-		*(Data++) = Callstack->returnAddr >> 8;
-		*(Data++) = Callstack->returnAddr;
-		*(Data++) = Callstack->numLocals & 0x0F;
-		*(Data++) = Callstack->returnStore;
-		*(Data++) = Callstack->setArguments;
-		*(Data++) = (NextNumberStackDepth - Callstack->depth) >> 8;
-		*(Data++) = (NextNumberStackDepth - Callstack->depth);
+		saveByte(stream, Callstack->returnAddr >> 16);
+		saveByte(stream, Callstack->returnAddr >> 8);
+		saveByte(stream, Callstack->returnAddr);
+		saveByte(stream, Callstack->numLocals & 0x0F);
+		saveByte(stream, Callstack->returnStore);
+		saveByte(stream, Callstack->setArguments);
+		saveByte(stream, (NextNumberStackDepth - Callstack->depth) >> 8);
+		saveByte(stream, (NextNumberStackDepth - Callstack->depth));
 		for (int s=0; s<Callstack->numLocals; s++)
 		{
-			*(Data++) = Callstack->locals[s] >> 8;
-			*(Data++) = Callstack->locals[s];
+			saveByte(stream, Callstack->locals[s] >> 8);
+			saveByte(stream, Callstack->locals[s]);
 		}
 		for (int s=Callstack->depth; s<NextNumberStackDepth; s++)
 		{
-			*(Data++) = m_numberstack[s] >> 8;
-			*(Data++) = m_numberstack[s];
+			saveByte(stream, m_numberstack[s] >> 8);
+			saveByte(stream, m_numberstack[s]);
 		}
 	}
-	return Data;
 }
 
-char* saveHeader(char* Data)
+void saveHeader(SaveStream* stream)
 {
 	// Seems weird but stored PC points at the branch part of the instruction
 	int storePC = m_pc - 1;
@@ -905,123 +947,125 @@ char* saveHeader(char* Data)
 	{
 		storePC--;
 	}
-	*(Data++) = ReadMemory(0x02);
-	*(Data++) = ReadMemory(0x03);
-	*(Data++) = ReadMemory(0x12);
-	*(Data++) = ReadMemory(0x13);
-	*(Data++) = ReadMemory(0x14);
-	*(Data++) = ReadMemory(0x15);
-	*(Data++) = ReadMemory(0x16);
-	*(Data++) = ReadMemory(0x17);
-	*(Data++) = ReadMemory(0x1C);
-	*(Data++) = ReadMemory(0x1D);
-	*(Data++) = storePC >> 16;
-	*(Data++) = storePC >> 8;
-	*(Data++) = storePC;
-	return Data;
+	saveByte(stream, ReadMemory(0x02));
+	saveByte(stream, ReadMemory(0x03));
+	saveByte(stream, ReadMemory(0x12));
+	saveByte(stream, ReadMemory(0x13));
+	saveByte(stream, ReadMemory(0x14));
+	saveByte(stream, ReadMemory(0x15));
+	saveByte(stream, ReadMemory(0x16));
+	saveByte(stream, ReadMemory(0x17));
+	saveByte(stream, ReadMemory(0x1C));
+	saveByte(stream, ReadMemory(0x1D));
+	saveByte(stream, storePC >> 16);
+	saveByte(stream, storePC >> 8);
+	saveByte(stream, storePC);
 }
 
-char* saveState(char* Data)
+void saveChunkPush(SaveStream* stream, char A, char B, char C, char D)
 {
-	int ChunkSize;
-	char* FormChunkSizePtr;
-	
-	*(Data++) = 'F';
-	*(Data++) = 'O';
-	*(Data++) = 'R';
-	*(Data++) = 'M';
-	FormChunkSizePtr = Data;
-	Data += 4;
-	*(Data++) = 'I';
-	*(Data++) = 'F';
-	*(Data++) = 'Z';
-	*(Data++) = 'S';
+	int chunkSize = stream->chunkSize[stream->chunkSizeIdx];
+	saveByte(stream, A);
+	saveByte(stream, B);
+	saveByte(stream, C);
+	saveByte(stream, D);
+	saveByte(stream, chunkSize>>24);
+	saveByte(stream, chunkSize>>16);
+	saveByte(stream, chunkSize>>8);
+	saveByte(stream, chunkSize);
+	stream->chunkStack[stream->chunkStackIdx++]=stream->chunkSizeIdx;
+	stream->chunkSize[stream->chunkSizeIdx++]=stream->pos;
+}
+
+void saveChunkPop(SaveStream* stream)
+{
+	int sizeIndex=stream->chunkStack[--stream->chunkStackIdx];
+	int chunkSize=stream->pos-stream->chunkSize[sizeIndex];
+	stream->chunkSize[sizeIndex]=chunkSize;
+	if (chunkSize&1)
+	{
+		saveByte(stream,0);
+	}
+}
+
+void saveState(SaveStream* stream)
+{
+	saveChunkPush(stream,'F','O','R','M');
+	saveByte(stream, 'I');
+	saveByte(stream, 'F');
+	saveByte(stream, 'Z');
+	saveByte(stream, 'S');
 
 	{
-		char* ChunkSizePtr;
+		saveChunkPush(stream,'I','F','h','d');
+		saveHeader(stream);
+		saveChunkPop(stream);
 
-		*(Data++) = 'I';
-		*(Data++) = 'F';
-		*(Data++) = 'h';
-		*(Data++) = 'd';
-		ChunkSizePtr = Data;
-		Data = saveHeader(Data + 4);
-		ChunkSize = Data - ChunkSizePtr - 4;
-		if (ChunkSize&1)
-			*(Data++) = 0;
-		*(ChunkSizePtr++) = ChunkSize >> 24;
-		*(ChunkSizePtr++) = ChunkSize >> 16;
-		*(ChunkSizePtr++) = ChunkSize >> 8;
-		*(ChunkSizePtr++) = ChunkSize;
+		saveChunkPush(stream,'C','M','e','m');
+		saveDynamicMemory(stream);
+		saveChunkPop(stream);
 
-		*(Data++) = 'C';
-		*(Data++) = 'M';
-		*(Data++) = 'e';
-		*(Data++) = 'm';
-		ChunkSizePtr = Data;
-		Data = saveDynamicMemory(Data + 4);
-		ChunkSize = Data - ChunkSizePtr - 4;
-		if (ChunkSize&1)
-			*(Data++) = 0;
-		*(ChunkSizePtr++) = ChunkSize >> 24;
-		*(ChunkSizePtr++) = ChunkSize >> 16;
-		*(ChunkSizePtr++) = ChunkSize >> 8;
-		*(ChunkSizePtr++) = ChunkSize;
-
-		*(Data++) = 'S';
-		*(Data++) = 't';
-		*(Data++) = 'k';
-		*(Data++) = 's';
-		ChunkSizePtr = Data;
-		Data = saveStacks(Data + 4);
-		ChunkSize = Data - ChunkSizePtr - 4;
-		if (ChunkSize&1)
-			*(Data++) = 0;
-		*(ChunkSizePtr++) = ChunkSize >> 24;
-		*(ChunkSizePtr++) = ChunkSize >> 16;
-		*(ChunkSizePtr++) = ChunkSize >> 8;
-		*(ChunkSizePtr++) = ChunkSize;
+		saveChunkPush(stream,'S','t','k','s');
+		saveStacks(stream);
+		saveChunkPop(stream);
 	}
 	
-	ChunkSize = Data - FormChunkSizePtr - 4;
-	if (ChunkSize&1)
-		*(Data++) = 0;
-	*(FormChunkSizePtr++) = ChunkSize >> 24;
-	*(FormChunkSizePtr++) = ChunkSize >> 16;
-	*(FormChunkSizePtr++) = ChunkSize >> 8;
-	*(FormChunkSizePtr++) = ChunkSize;
-
-	return Data;
+	saveChunkPop(stream);
+	saveFlush(stream);
 }
 
-int restoreState(unsigned char* Data, unsigned char* End)
+void readFromDisk(SaveStream* stream)
 {
-	bool bFoundHeader=FALSE;
-	bool bFoundMem=FALSE;
-	bool bFoundStacks=FALSE;
+	stream->end=stream->buffer+fread(stream->buffer,1,sizeof(stream->buffer),stream->f);
+	stream->ptr=stream->buffer;
+}
+
+int readHasData(SaveStream* stream)
+{
+	return (stream->ptr<stream->end);
+}
+
+uint8_t readByte(SaveStream* stream)
+{
+	uint8_t ret;
+	ret=*(stream->ptr++);
+	stream->pos++;
+	if (stream->ptr>=stream->end)
+	{
+		readFromDisk(stream);
+	}
+	return ret;
+}
+
+int restoreState(SaveStream* stream)
+{
 	char ChunkId[4];
+	int bFoundHeader=FALSE;
+	int bFoundMem=FALSE;
+	int bFoundStacks=FALSE;
 	int ChunkSize;
 	int i;
-	while (Data<End)
+	readFromDisk(stream);
+	while (readHasData(stream))
 	{
-		unsigned char* NextChunk;
-		unsigned char* ChunkEnd;
-		ChunkId[0]=*(Data++);
-		ChunkId[1]=*(Data++);
-		ChunkId[2]=*(Data++);
-		ChunkId[3]=*(Data++);
-		ChunkSize=*(Data++)<<24;
-		ChunkSize+=*(Data++)<<16;
-		ChunkSize+=*(Data++)<<8;
-		ChunkSize+=*(Data++);
-		ChunkEnd=Data+ChunkSize;
-		NextChunk = Data+((ChunkSize+1)&~1);
+		int NextChunk;
+		int ChunkEnd;
+		ChunkId[0]=readByte(stream);
+		ChunkId[1]=readByte(stream);
+		ChunkId[2]=readByte(stream);
+		ChunkId[3]=readByte(stream);
+		ChunkSize=readByte(stream)<<24;
+		ChunkSize+=readByte(stream)<<16;
+		ChunkSize+=readByte(stream)<<8;
+		ChunkSize+=readByte(stream);
+		ChunkEnd=stream->pos+ChunkSize;
+		NextChunk=stream->pos+((ChunkSize+1)&~1);
 		if (ChunkId[0]=='F' && ChunkId[1]=='O' && ChunkId[2]=='R' && ChunkId[3]=='M')
 		{
-			ChunkId[0]=*(Data++);
-			ChunkId[1]=*(Data++);
-			ChunkId[2]=*(Data++);
-			ChunkId[3]=*(Data++);
+			ChunkId[0]=readByte(stream);
+			ChunkId[1]=readByte(stream);
+			ChunkId[2]=readByte(stream);
+			ChunkId[3]=readByte(stream);
 			if (ChunkId[0]=='I' && ChunkId[1]=='F' && ChunkId[2]=='Z' && ChunkId[3]=='S')
 			{
 				continue; // Want to read inner chunks so don't skip
@@ -1033,26 +1077,26 @@ int restoreState(unsigned char* Data, unsigned char* End)
 			int Locations[]={0x02, 0x03, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1C, 0x1D};
 			for (i=0; i<ARRAY_SIZEOF(Locations); i++)
 			{
-				if ((unsigned char)memory[Locations[i]]!=*(Data++))
+				if ((unsigned char)memory[Locations[i]]!=readByte(stream))
 				{
 					return FALSE;
 				}
 			}
-			m_pc = *(Data++)<<16;
-			m_pc += *(Data++)<<8;
-			m_pc += *(Data++);
+			m_pc=readByte(stream)<<16;
+			m_pc+=readByte(stream)<<8;
+			m_pc+=readByte(stream);
 			bFoundHeader=TRUE;
 		}
 		else if (ChunkId[0]=='C' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
 		{
 			char* DynamicData = dynamic;
 			memcpy(DynamicData,memory,m_endOfDynamic);
-			while (Data<ChunkEnd)
+			while (stream->pos<ChunkEnd)
 			{
-				unsigned char Value=*(Data++);
+				unsigned char Value=readByte(stream);
 				if (Value==0x00)
 				{
-					int Length=*(Data++)+1;
+					int Length=readByte(stream)+1;
 					DynamicData+=Length;
 				}
 				else
@@ -1064,7 +1108,12 @@ int restoreState(unsigned char* Data, unsigned char* End)
 		}
 		else if (ChunkId[0]=='U' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
 		{
-			memcpy(dynamic,Data,ChunkSize);
+			char* DynamicData = dynamic;
+			memcpy(DynamicData,memory,m_endOfDynamic);
+			while (stream->pos<ChunkEnd)
+			{
+				*(DynamicData++)=readByte(stream);
+			}
 			bFoundMem=TRUE;
 		}
 		else if (ChunkId[0]=='S' && ChunkId[1]=='t' && ChunkId[2]=='k' && ChunkId[3]=='s')
@@ -1077,38 +1126,39 @@ int restoreState(unsigned char* Data, unsigned char* End)
 			{
 				stackPop(&m_callStack);
 			}
-			while (Data<ChunkEnd)
+			while (stream->pos<ChunkEnd)
 			{
 				ZCallStack* CS=(ZCallStack*)stackPush(&m_callStack);
 				int StackDepth;
-				CS->returnAddr=*(Data++)<<16;
-				CS->returnAddr+=*(Data++)<<8;
-				CS->returnAddr+=*(Data++);
-				CS->numLocals=*(Data++)&0x0F;
-				CS->returnStore=*(Data++);
-				CS->setArguments=*(Data++);
+				CS->returnAddr=readByte(stream)<<16;
+				CS->returnAddr+=readByte(stream)<<8;
+				CS->returnAddr+=readByte(stream);
+				CS->numLocals=readByte(stream)&0x0F;
+				CS->returnStore=readByte(stream);
+				CS->setArguments=readByte(stream);
 				CS->depth=stackDepth(&m_stack);
-				StackDepth=*(Data++)<<8;
-				StackDepth+=*(Data++);
+				StackDepth=readByte(stream)<<8;
+				StackDepth+=readByte(stream);
 				for (int s=0; s<CS->numLocals; s++)
 				{
-					CS->locals[s]=makeS16(Data[0], Data[1]);
-					Data+=2;
+					uint8_t MSB=readByte(stream);
+					CS->locals[s]=makeS16(MSB, readByte(stream));
 				}
 				while (StackDepth--)
 				{
-					*(s16*)stackPush(&m_stack)=makeS16(Data[0], Data[1]);
-					Data+=2;
+					uint8_t MSB=readByte(stream);
+					*(s16*)stackPush(&m_stack)=makeS16(MSB, readByte(stream));
 				}
 			}
 			bFoundStacks=TRUE;
 		}
-		Data=NextChunk;
+		while (stream->pos<NextChunk)
+		{
+			(void)readByte(stream);
+		}
 	}
 	return (bFoundHeader && bFoundMem && bFoundStacks);
 }
-			
-byte savedata[4096];
 
 void process0OPInstruction()
 {
@@ -1132,12 +1182,16 @@ void process0OPInstruction()
 			break;
 		case 5: //save
 			{
-				byte* end=saveState(savedata);
-				FILE *f = fopen("/spiflash/save.sav", "wb");
-				if (f)
+				// Prime with chunk sizes
+				saveResetStream(&m_savestream);
+				saveState(&m_savestream);
+				// Actually write to file
+				saveResetStream(&m_savestream);
+				m_savestream.f=fopen("/spiflash/save.sav","wb");
+				if (m_savestream.f)
 				{
-					fwrite(savedata, end - savedata, 1, f);
-					fclose(f);
+					saveState(&m_savestream);
+					fclose(m_savestream.f);
 					doBranch(TRUE, m_ins.branch);
 				}
 				else
@@ -1148,17 +1202,18 @@ void process0OPInstruction()
 			}
 		case 6: //restore
 			{
-				FILE *f = fopen("/spiflash/save.sav", "rb");
-				if (f)
+				saveResetStream(&m_savestream);
+				m_savestream.f = fopen("/spiflash/save.sav", "rb");
+				if (m_savestream.f)
 				{
-					int len=fread(savedata, 1, sizeof(savedata), f);
-					fclose(f);
-					if (restoreState((unsigned char*)savedata, (unsigned char*)savedata+len))
+					if (restoreState(&m_savestream))
 					{
-						m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),m_ins.op);
+						fclose(m_savestream.f);
+						m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),5);
 						doBranch(TRUE, m_ins.branch);
 						break;
 					}
+					fclose(m_savestream.f);
 				}
 				doBranch(FALSE, m_ins.branch);
 				break;
