@@ -356,7 +356,24 @@ void wifi_init_sta()
 
 void GameTask(void *pvParameters)
 {
-	zopsMain(Game);
+	// # To write to the partition
+	// parttool.py --port "/dev/ty.SLAB_USBtoUART" write_partition --partition-name=games "Planetfa.z3"
+	const void *GameData = nullptr;
+	const esp_partition_t* GamesPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "games");
+	spi_flash_mmap_handle_t FlashHandle = 0;
+	if (GamesPartition)
+	{
+		esp_partition_mmap(GamesPartition, 0, 120 * 1024, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle);
+	}
+	if (!GameData)
+	{
+		GameData = Game;
+	}
+	zopsMain((const char*)GameData);
+	if (FlashHandle)
+	{
+		spi_flash_munmap(FlashHandle);
+	}
 }
 
 void MountFAT()
