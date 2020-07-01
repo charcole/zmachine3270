@@ -195,6 +195,7 @@ static stack m_stack;
 static ZCallStack m_callstackcontents[96];
 static stack m_callStack;
 static SaveStream m_savestream;
+static char m_input[128];
 
 byte ReadMemory(int Address)
 {
@@ -1182,12 +1183,17 @@ void process0OPInstruction()
 			break;
 		case 5: //save
 			{
+				ScreenPrint("\nSelect a file name (filename.qzl):");
+				strcpy(m_input, "/spiflash/");
+				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
+				ScreenPrint(m_input+sizeof("/spiflash/")-1);
+				ScreenPrintChar('\n');
 				// Prime with chunk sizes
 				saveResetStream(&m_savestream);
 				saveState(&m_savestream);
 				// Actually write to file
 				saveResetStream(&m_savestream);
-				m_savestream.f=fopen("/spiflash/save.sav","wb");
+				m_savestream.f=fopen(m_input,"wb");
 				if (m_savestream.f)
 				{
 					saveState(&m_savestream);
@@ -1202,8 +1208,13 @@ void process0OPInstruction()
 			}
 		case 6: //restore
 			{
+				ScreenPrint("\nSelect a file name (filename.qzl):");
+				strcpy(m_input, "/spiflash/");
+				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
+				ScreenPrint(m_input+sizeof("/spiflash/")-1);
+				ScreenPrintChar('\n');
 				saveResetStream(&m_savestream);
-				m_savestream.f = fopen("/spiflash/save.sav", "rb");
+				m_savestream.f = fopen(m_input, "rb");
 				if (m_savestream.f)
 				{
 					if (restoreState(&m_savestream))
@@ -1578,7 +1589,6 @@ void processVARInstruction()
 			}
 		case 4: //sread
 			{
-				static char input[256];
 				int bufferAddr=m_ins.operands[0].value;
 				int parseAddr=m_ins.operands[1].value;
 				int maxLength=ReadMemory(bufferAddr++)&0xFF;
@@ -1587,19 +1597,19 @@ void processVARInstruction()
 				int inLen;
 				int i;
 				updateStatus();
-				ScreenReadInput(input, sizeof(input));
-				inLen=strlen(input);
+				ScreenReadInput(m_input, sizeof(m_input));
+				inLen=strlen(m_input);
 				for (i=0; i<inLen && i<maxLength; i++)
 				{
-					if (input[i]!='\r' && input[i]!='\n')
+					if (m_input[i]!='\r' && m_input[i]!='\n')
 					{
-						input[realInLen++]=tolower((int)input[i]);
-						SetMemory(bufferAddr++,(byte)input[i]);
+						m_input[realInLen++]=tolower((int)m_input[i]);
+						SetMemory(bufferAddr++,(byte)m_input[i]);
 					}
 				}
-				input[realInLen]='\0';
+				m_input[realInLen]='\0';
 				SetMemory(bufferAddr++,0);
-				SetMemory(parseAddr,(byte)lexicalAnalysis(input, parseAddr+1, maxParse));
+				SetMemory(parseAddr,(byte)lexicalAnalysis(m_input, parseAddr+1, maxParse));
 				break;
 			}
 		case 5: //print_char
