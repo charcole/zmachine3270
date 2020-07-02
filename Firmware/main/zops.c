@@ -1183,7 +1183,7 @@ void process0OPInstruction()
 			break;
 		case 5: //save
 			{
-				ScreenPrint("\nSelect a file name (filename.qzl):");
+				ScreenPrint("Select a file name (filename.qzl):");
 				strcpy(m_input, "/spiflash/");
 				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
 				ScreenPrint(m_input+sizeof("/spiflash/")-1);
@@ -1208,7 +1208,7 @@ void process0OPInstruction()
 			}
 		case 6: //restore
 			{
-				ScreenPrint("\nSelect a file name (filename.qzl):");
+				ScreenPrint("Select a file name (filename.qzl):");
 				strcpy(m_input, "/spiflash/");
 				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
 				ScreenPrint(m_input+sizeof("/spiflash/")-1);

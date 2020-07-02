@@ -24,6 +24,7 @@ extern "C"
 };
 #include "webpage.h"
 #include "zops.h"
+#include "FrontEnd.h"
 
 #ifndef CONFIG_WL_SECTOR_SIZE
 #define CONFIG_WL_SECTOR_SIZE 4096
@@ -357,16 +358,24 @@ void wifi_init_sta()
 void GameTask(void *pvParameters)
 {
 	// # To write to the partition
-	// parttool.py --port "/dev/ty.SLAB_USBtoUART" write_partition --partition-name=games "Planetfa.z3"
+	// Tool at ~/esp/esp-idf/components/partition_table/parttool2.py (2 is own name for newer github version)
+	// parttool.py --port "/dev/tty.SLAB_USBtoUART" write_partition --partition-name=games --input "GameData.bin"
 	const void *GameData = nullptr;
 	const esp_partition_t* GamesPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "games");
 	spi_flash_mmap_handle_t FlashHandle = 0;
 	if (GamesPartition)
 	{
-		esp_partition_mmap(GamesPartition, 0, 120 * 1024, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle);
+		constexpr int GameSize = 128 * 1024;
+		FrontEnd SelectionScreen;
+		const int CurrentGame = SelectionScreen.Show(&GScreen);
+		if (esp_partition_mmap(GamesPartition, CurrentGame * GameSize, GameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
+		{
+    		ESP_LOGI(TAG, "Playing game from partition");
+		}
 	}
 	if (!GameData)
 	{
+    	ESP_LOGI(TAG, "Playing embedded game");
 		GameData = Game;
 	}
 	zopsMain((const char*)GameData);
