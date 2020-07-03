@@ -25,6 +25,8 @@ extern "C"
 #define RING_BUF_MASK	(RING_BUF_SIZE-1)
 #define INVALID_PACKET	~0u
 
+#define DUMP_PACKETS	0
+
 extern volatile bool bQuitTasks;
 extern volatile bool bDoneQuitTask1;
 extern volatile bool bDoneQuitTask2;
@@ -212,13 +214,15 @@ void MessageTask(void *pvParameters)
 		uint8_t SendBuffer[2048+1024];
 		bool bWaitForReply = false;
 		int SendSize = Network.GenerateNewPackets(SendBuffer, bWaitForReply);
-		
-		/*printf("Sending packet of size %d:", SendSize);
+
+		#if DUMP_PACKETS
+		printf("Sending packet of size %d:", SendSize);
 		for (int i=0; i<SendSize; i++)
 		{
 			printf(" %02x", SendBuffer[i]);
 		}
-		printf("\n");*/
+		printf("\n");
+		#endif
 
 		CBitStream A(SendBuffer, SendSize);
 		CBitStream B;
@@ -252,16 +256,20 @@ void MessageTask(void *pvParameters)
 					PacketData[PacketIndex] = RecvRingBuff[(Packet[0]++) & RING_BUF_MASK];
 				}
 				
-                /*printf("Recieved packet of length %d:", LengthOfPacket);
+				#if DUMP_PACKETS
+                printf("Recieved packet of length %d:", LengthOfPacket);
 				for (int i=0; i<LengthOfPacket; i++)
 				{
 					printf(" %02x", PacketData[i]);
 				}
-				printf("\n");*/
+				printf("\n");
+				#endif
 
 				PacketParser ProcessedPacket;
 				ProcessedPacket.Parse(PacketData, LengthOfPacket);
-				//ProcessedPacket.Dump(PacketData);
+				#if DUMP_PACKETS
+				ProcessedPacket.Dump(PacketData);
+				#endif
 				
 				Network.ProcessPacket(ProcessedPacket, PacketData);
 			}

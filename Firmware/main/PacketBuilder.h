@@ -185,11 +185,11 @@ private:
 class RequestPacket : public TranmissionPacket
 {
 public:
-	RequestPacket(SNAStream &Stream, uint8_t Category, uint8_t Destination, uint8_t Source, bool bExpedited = false, bool bFinal = false, bool bChangeDirection = false, bool bStartOfBracket = true)
+	RequestPacket(SNAStream &Stream, uint8_t Category, uint8_t Destination, uint8_t Source, bool bStartOfChain = true, bool bEndOfChain = true, bool bExpedited = false, bool bFinal = false, bool bChangeDirection = false, bool bStartOfBracket = true)
 		: TranmissionPacket(Stream, Destination, Source, bExpedited, bFinal)
 	{
-		SendData((Category << 5) | 3);					   // Category + Start+end of chain
-		SendData(0x80 + (bChangeDirection ? 0x20 : 0x00)); // Definitive response required
+		SendData((Category << 5) | (bStartOfChain ? 2 : 0) | (bEndOfChain ? 1 : 0));
+		SendData((bEndOfChain ? 0x80 : 0) + (bChangeDirection ? 0x20 : 0x00)); // Definitive response required
 		SendData(bStartOfBracket ? 0xC0 : 0x40);		   // Start and end of bracket
 	}
 };

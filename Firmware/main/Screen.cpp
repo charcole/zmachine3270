@@ -223,15 +223,7 @@ int Screen::SerializeScreen3270()
             Packets[NumPackets].Length = BeforeLine - Packets[NumPackets].Start;
             NumPackets++;
             Packets[NumPackets].Start = BeforeLine;
-            // Line pushed over max packet size so shift line data over and insert new header
-            constexpr int HeaderSize = 5;
-            memmove(BeforeLine + HeaderSize, BeforeLine, Data - BeforeLine);
-            Data += HeaderSize;
             EndOfPacket = BeforeLine + MaxPacketSize;
-            *(BeforeLine++) = WriteCommand;
-            *(BeforeLine++) = WCC;
-            *(BeforeLine++) = SetBufferAddress;
-            AddScreenAddress(BeforeLine, 0, Line);
         }
         CurrentLine++;
         if (CurrentLine >= NUM_ROWS)

@@ -7,7 +7,7 @@ class PacketParser
 public:
     PacketParser();
     void Parse(const uint8_t *PacketData, int PacketSize);
-    void Dump(const uint8_t *Data);
+    void Dump(const uint8_t *Data) const;
 
     ParsedSDLC SDLC;
     ParsedFID2 FID2;

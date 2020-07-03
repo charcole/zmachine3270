@@ -8,7 +8,7 @@ NetworkState::NetworkState()
 int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
 {
     Stream.Reset();
-    if (bSendReadyToRecieve)
+    if (bSendReadyToRecieve || WaitForSequence != -1)
     {
         SDLCReadyToRecieve RR(Stream);
         bSendReadyToRecieve = false;
@@ -36,7 +36,8 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     {
         Stream.SetSequence(0x1568);
         {
-            RequestPacket ACTPU(Stream, 3, 0, 0, true);
+            WaitForSequence = Stream.Sequence;
+            RequestPacket ACTPU(Stream, 3, 0, 0, true, true, true);
             ACTPU.SendData({0x11, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A});
         }
         bSendReadyToRecieve = true;
@@ -47,7 +48,8 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     {
         Stream.SetSequence(0x1569);
         {
-            RequestPacket ACTLU(Stream, 3, 2, 0, true);
+            WaitForSequence = Stream.Sequence;
+            RequestPacket ACTLU(Stream, 3, 2, 0, true, true, true);
             ACTLU.SendData({0x0D, 0x01, 0x01});
         }
         bSendReadyToRecieve = true;
@@ -58,6 +60,7 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     {
         Stream.SetSequence(0x0);
         {
+            WaitForSequence = Stream.Sequence;
             RequestPacket Bind(Stream, 3, 2, 1);
             Bind.SendData({0x31, 0x01, 0x03, 0x03, 0xA1, 0xA1, 0x30, 0x80, 0x00,
                            0x01, 0x85, 0x85, 0x0A, 0x00, 0x02, 0x11, 0x00, 0x00,
@@ -71,6 +74,7 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     case StateDataReset:
     {
         {
+            WaitForSequence = Stream.Sequence;
             RequestPacket DataReset(Stream, 3, 2, 1);
             DataReset.SendData(0xA0);
         }
@@ -81,9 +85,12 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     case StateSendScreen:
     {
         {
+            bool bStartOfChain=false;
+            bool bEndOfChain=false;
             if (CurrentLine == 0)
             {
                 Num3270Packets = GScreen.SerializeScreen3270();
+                bStartOfChain=true;
             }
             int PacketSize = 0;
             const char* PacketData = GScreen.GetScreen3270Packet(CurrentLine++, PacketSize);
@@ -91,8 +98,10 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
             {
                 CurrentLine = 0;
                 State = StateWaitForInput;
+                bEndOfChain=true;
             }
-            RequestPacket DataStream3270(Stream, 0, 2, 1);
+            WaitForSequence = Stream.Sequence;
+            RequestPacket DataStream3270(Stream, 0, 2, 1, bStartOfChain, bEndOfChain);
             while (PacketSize--)
             {
                 DataStream3270.SendData(*(PacketData++));
@@ -120,10 +129,11 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     case StateRespond2:
     {
         {
-            RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
+            WaitForSequence = Stream.Sequence;
+            RequestPacket DataReset(Stream, 0, 2, 1, true, true, false, false, false, false);
         }
         bSendReadyToRecieve = true;
-        State = StateDataReset;
+        State = StateSendScreen;
         break;
     }
     }
@@ -134,6 +144,7 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
 {
     if (!Packet.bPacketGood)
     {
+        printf("Bad packet: CRC mismatch (State:%d)", State);
         bSendReadyToRecieve = true;
         return;
     }
@@ -145,13 +156,14 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
             if (Packet.SDLC.RecieveCount != (Stream.SendCount & 7))
             {
                 // Not got last message so resend?
-                printf("RecvCount (%d) != SendCount (%d) so resending last message (%d:%d:%d)\n", Packet.SDLC.RecieveCount, Stream.SendCount & 7, State, CurrentLine, bSendReadyToRecieve);
                 if (bSendReadyToRecieve)
                 {
                     // Just sent something. Shouldn't be recieving anything yet.
                     // Hasn't processed what we just sent yet or we're out of sync?
                     return;
                 }
+                printf("RecvCount (%d) != SendCount (%d) so resending last message (%d:%d:%d)\n", Packet.SDLC.RecieveCount, Stream.SendCount & 7, State, CurrentLine, bSendReadyToRecieve);
+                WaitForSequence=-1;
                 Stream.SendCount--;
                 if (CurrentLine > 0)
                 {
@@ -175,9 +187,25 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
             Stream.IncreaseRecieveCount();
         }
     }
+    if (Packet.bFID2Valid && WaitForSequence != -1)
+    {
+        if (Packet.FID2.Sequence == WaitForSequence)
+        {
+            WaitForSequence = -1;
+        }
+        else
+        {
+            printf("Recieved out of sequence packet %d != %d (State:%d)\n", Packet.FID2.Sequence, WaitForSequence, State);
+        }
+    }
+    if (Packet.bResponseValid && !Packet.Res.bPositiveResponse)
+    {
+        printf("Recieved negative response (State:%d)", State);
+        Packet.Dump(Data);
+    }
     if (Packet.bRequestValid && Packet.Req.bChangeDirection)
     {
-        if (Packet.FID2.Sequence != ProcessedPacket)
+        //if (Packet.FID2.Sequence != ProcessedPacket)
         {
             State = StateRespond;
             if (Packet.bResponseValid || Packet.bRequestValid)
@@ -187,22 +215,26 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
 
                 if (Data[Packet.StartOfData] == 0x7D) // ENTER key
                 {
-                    char InputString[128];
-                    if (Packet.EndOfData - Packet.StartOfData - 6 < sizeof(InputString) - 1)
+                    int DataOffset = Packet.StartOfData + 3; // Skip AID and cursor address
+                    if (Packet.EndOfData > DataOffset)       // Could be it if no input
                     {
-                        int DataOffset = Packet.StartOfData + 3; // Skip AID and cursor address
                         if (Data[DataOffset] == 0x11) // Set Buffer Address always seems to follow
                         {
                             DataOffset += 3; // SBA + Address
-                            char *Input = InputString;
-                            for (int TextIndex = DataOffset; TextIndex < Packet.EndOfData; TextIndex++)
-                            {
-                                *(Input++) = EBCDICToASCII[Data[TextIndex]];
-                            }
-                            *(Input++) = '\0';
-                            printf("Input: %s\n", InputString);
-                            GScreen.ProvideInput(InputString);
                         }
+                    }
+
+                    char InputString[128];
+                    if (Packet.EndOfData - DataOffset < sizeof(InputString) - 1)
+                    {
+                        char *Input = InputString;
+                        for (int TextIndex = DataOffset; TextIndex < Packet.EndOfData; TextIndex++)
+                        {
+                            *(Input++) = EBCDICToASCII[Data[TextIndex]];
+                        }
+                        *(Input++) = '\0';
+                        printf("Input: %s\n", InputString);
+                        GScreen.ProvideInput(InputString);
                     }
                 }
             }

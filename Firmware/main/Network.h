@@ -30,5 +30,6 @@ private:
 	uint16_t ProcessedPacket = 0xFFFF;
 	int CurrentLine = 0;
 	int Num3270Packets = 0;
+	int WaitForSequence = -1;
 	bool bSendReadyToRecieve = false;
 };

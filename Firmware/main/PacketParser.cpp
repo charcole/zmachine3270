@@ -117,7 +117,7 @@ void PacketParser::Parse(const uint8_t *PacketData, int PacketSize)
     }
 }
 
-void PacketParser::Dump(const uint8_t *Data)
+void PacketParser::Dump(const uint8_t *Data) const
 {
     if (!bPacketGood)
     {
