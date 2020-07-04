@@ -17,10 +17,10 @@ public:
     Screen();
     void Print(const char* String);
     void Print(char Char);
-    void ProvideInput(const char* Input);
-    void ReadInput(char *Input, int MaxLength);
     void GetCursorPosition(int& X, int& Y);
     void SetCursorPosition(int X, int Y);
+    
+    int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false);
     
     int SerializeScreen3270();
     const char* GetScreen3270Packet(int PacketNum, int& PacketSize)
@@ -28,6 +28,10 @@ public:
         PacketSize = Packets[PacketNum].Length;
         return Packets[PacketNum].Start;
     }
+
+    void Process3270Reply(const uint8_t* Data, int Size);
+    
+    void SetRawStream(const char* RawData, int Size);
 
 private:
     void AddScreenAddress(char* &Data, int Col, int Row);
@@ -43,17 +47,22 @@ private:
 
     struct FPacket
     {
-        char* Start;
+        const char* Start;
         int Length;
     };
     FPacket Packets[NUM_ROWS];
 
     char Serialized3270Data[NUM_ROWS * (NUM_COLS + 16)]; // Space for header + cursor setting
+    
+    const char* RawStream = nullptr;
+    int RawStreamSize = 0;
 
     int TopLine = 0;
     int CursorRow = 0;
     int CursorCol = 0;
+    int LastInputLength = 0;
     bool bWordwrap = false;
+    bool bRawInputWanted = false;
 
     volatile char* WaitingInput = nullptr;
     volatile TaskHandle_t TaskHandle;

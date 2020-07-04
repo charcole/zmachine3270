@@ -100,23 +100,21 @@ void Screen::Print(char Char)
     }
 }
 
-void Screen::ProvideInput(const char* Input)
-{
-    strcpy((char*)WaitingInput, Input);
-    bSuspended = false;
-    xTaskNotifyGive(TaskHandle);
-}
-
-void Screen::ReadInput(char* Input, int MaxLength)
+int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput)
 {
     WaitingInput = Input;
+    bRawInputWanted = bWantRawInput;
     TaskHandle = xTaskGetCurrentTaskHandle();
     bSuspended = true;
     ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
-    Print(' ');
-    Print(Input);
-    Print('\n');
-    Print('\n');
+    if (!bWantRawInput)
+    {
+        Print(' ');
+        Print(Input);
+        Print('\n');
+        Print('\n');
+    }
+    return LastInputLength;
 }
 
 void Screen::AddScreenAddress(char* &Data, int Col, int Row)
@@ -168,14 +166,43 @@ void Screen::WriteScreenData(char* &Data, int Col, int Row, const char* ASCIIDat
     WriteMultiple(Data, Col, Row, LastChar, Run);
 }
 
+void Screen::SetRawStream(const char* RawData, int Size)
+{
+    RawStream = RawData;
+    RawStreamSize = Size;
+}
+
 int Screen::SerializeScreen3270()
 {
     while (!bSuspended)
     {
         vTaskDelay(5);
     }
-
+    
+    constexpr int MaxPacketSize = 240;
     int NumPackets = 0;
+
+    if (RawStream)
+    {
+        // Overrides the screen with raw 3270 datastream. Used for TN3270 support
+        Packets[NumPackets].Start = RawStream;
+        while (RawStreamSize > 0)
+        {
+            int Size = RawStreamSize;
+            if (Size > MaxPacketSize)
+            {
+                Size = MaxPacketSize;
+            }
+            Packets[NumPackets++].Length = Size;
+            RawStream += Size;
+            RawStreamSize -= Size;
+            Packets[NumPackets].Start = RawStream;
+        }
+        RawStream = nullptr;
+        RawStreamSize = 0;
+        return NumPackets;
+    }
+
     char* Data = Serialized3270Data;
     
     Packets[NumPackets].Start = Data;
@@ -185,7 +212,6 @@ int Screen::SerializeScreen3270()
     *(Data++) = SetBufferAddress;
     AddScreenAddress(Data, 0, 0);
 
-    constexpr int MaxPacketSize = 240;
     char* EndOfPacket = Serialized3270Data + MaxPacketSize;
 
     int CurrentLine = TopLine;
@@ -234,6 +260,45 @@ int Screen::SerializeScreen3270()
     Packets[NumPackets].Length = Data - Packets[NumPackets].Start;
     NumPackets++;
     return NumPackets;
+}
+
+void Screen::Process3270Reply(const uint8_t* Data, int Size)
+{
+    if (bRawInputWanted)
+    {
+        memcpy((void *)WaitingInput, Data, Size);
+        LastInputLength = Size;
+    }
+    else
+    {
+        char InputString[128];
+        char *Input = InputString;
+        if (Size > 0 && Data[0] == 0x7D) // ENTER key
+        {
+            int DataOffset = 3;    // Skip AID and cursor address
+            if (Size > DataOffset) // Could be it if no input
+            {
+                if (Data[DataOffset] == 0x11) // Set Buffer Address always seems to follow
+                {
+                    DataOffset += 3; // SBA + Address
+                }
+            }
+
+            if (Size - DataOffset < sizeof(InputString) - 1)
+            {
+                for (int TextIndex = DataOffset; TextIndex < Size; TextIndex++)
+                {
+                    *(Input++) = EBCDICToASCII[Data[TextIndex]];
+                }
+            }
+        }
+        *(Input++) = '\0';
+        printf("Input: %s\n", InputString);
+        strcpy((char *)WaitingInput, InputString);
+        LastInputLength = strlen(InputString);
+    }
+    bSuspended = false;
+    xTaskNotifyGive(TaskHandle);
 }
 
 void Screen::GetCursorPosition(int& X, int& Y)

@@ -213,30 +213,7 @@ void NetworkState::ProcessPacket(const PacketParser &Packet, const uint8_t *Data
                 //Stream.SetSequence(Packet.FID2.Sequence + 1);
                 ProcessedPacket = Packet.FID2.Sequence;
 
-                if (Data[Packet.StartOfData] == 0x7D) // ENTER key
-                {
-                    int DataOffset = Packet.StartOfData + 3; // Skip AID and cursor address
-                    if (Packet.EndOfData > DataOffset)       // Could be it if no input
-                    {
-                        if (Data[DataOffset] == 0x11) // Set Buffer Address always seems to follow
-                        {
-                            DataOffset += 3; // SBA + Address
-                        }
-                    }
-
-                    char InputString[128];
-                    if (Packet.EndOfData - DataOffset < sizeof(InputString) - 1)
-                    {
-                        char *Input = InputString;
-                        for (int TextIndex = DataOffset; TextIndex < Packet.EndOfData; TextIndex++)
-                        {
-                            *(Input++) = EBCDICToASCII[Data[TextIndex]];
-                        }
-                        *(Input++) = '\0';
-                        printf("Input: %s\n", InputString);
-                        GScreen.ProvideInput(InputString);
-                    }
-                }
+                GScreen.Process3270Reply(&Data[Packet.StartOfData], Packet.EndOfData - Packet.StartOfData);
             }
         }
     }
