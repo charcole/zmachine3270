@@ -20,7 +20,7 @@ public:
     void GetCursorPosition(int& X, int& Y);
     void SetCursorPosition(int X, int Y);
     
-    int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false);
+    int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false, int Timeout = portMAX_DELAY);
     
     int SerializeScreen3270();
     const char* GetScreen3270Packet(int PacketNum, int& PacketSize)
@@ -32,6 +32,9 @@ public:
     void Process3270Reply(const uint8_t* Data, int Size);
     
     void SetRawStream(const char* RawData, int Size);
+
+    void CancelInput();
+    bool ShouldCancelInput();
 
 private:
     void AddScreenAddress(char* &Data, int Col, int Row);
@@ -63,7 +66,8 @@ private:
     int LastInputLength = 0;
     bool bWordwrap = false;
     bool bRawInputWanted = false;
-
+    bool bCancelInput = false;
+    
     volatile char* WaitingInput = nullptr;
     volatile TaskHandle_t TaskHandle;
     volatile bool bSuspended = false;

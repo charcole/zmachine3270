@@ -177,25 +177,54 @@ void TN3270::Process()
                 }
                 else if (Verb == EOR)
                 {
+                    printf("Providing some data for the screen\n");
                     if (DataStreamPtr > DataStream && DataStreamPtr < DataStream + sizeof(DataStream))
                     {
                         GScreen.SetRawStream((const char *)DataStream, DataStreamPtr - DataStream);
                     }
                     DataStreamPtr = DataStream;
-                    int InputLength = GScreen.ReadInput((char*)DataStream, sizeof(DataStream), true);
-                    if (InputLength > 0 && DataStream[0]!=0x4C) // Allow PF24 to be ignored
+
+                    bool bHasCancelledInput = false;
+                    while (true)
                     {
-                        for (int InputIndex = 0; InputIndex < InputLength; InputIndex++)
+                        int InputLength = GScreen.ReadInput((char *)DataStream, sizeof(DataStream), true, 20);
+                        if (InputLength > 0) // Allow PF24 to be ignored
                         {
-                            if (DataStream[InputIndex] == IAC)
+                            printf("Got some input\n");
+                            for (int InputIndex = 0; InputIndex < InputLength; InputIndex++)
                             {
-                                SendByte(IAC); // Escape 0xFF
+                                if (DataStream[InputIndex] == IAC)
+                                {
+                                    SendByte(IAC); // Escape 0xFF
+                                }
+                                SendByte(DataStream[InputIndex]);
                             }
-                            SendByte(DataStream[InputIndex]);
+                            SendByte(IAC);
+                            SendByte(EOR);
+                            SendFlush();
+                            break;
                         }
-                        SendByte(IAC);
-                        SendByte(EOR);
-                        SendFlush();
+                        else if (InputLength == 0)
+                        {
+                            printf("Has cancelled the input\n");
+                            break;
+                        }
+                        else if (InputLength == -1 && !bHasCancelledInput) // Timeout, check if we have any more data to recv
+                        {
+                            fd_set RecvFdSet;
+                            FD_ZERO(&RecvFdSet);
+                            FD_SET(SocketFD, &RecvFdSet);
+                            timeval TimeVal;
+                            TimeVal.tv_sec=0;
+                            TimeVal.tv_usec=0;
+                            int SelectReturn = select(SocketFD + 1, &RecvFdSet, nullptr, nullptr, &TimeVal);
+                            if (SelectReturn > 0 && FD_ISSET(SocketFD, &RecvFdSet)) // More data to read
+                            {
+                                printf("Cancelling input as we have some more data pending\n");
+                                GScreen.CancelInput();
+                                bHasCancelledInput = true;
+                            }
+                        }
                     }
                 }
                 continue;

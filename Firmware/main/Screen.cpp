@@ -100,13 +100,21 @@ void Screen::Print(char Char)
     }
 }
 
-int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput)
+int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout)
 {
-    WaitingInput = Input;
-    bRawInputWanted = bWantRawInput;
-    TaskHandle = xTaskGetCurrentTaskHandle();
-    bSuspended = true;
-    ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+    if (!bSuspended && !bCancelInput)
+    {
+        WaitingInput = Input;
+        bRawInputWanted = bWantRawInput;
+        TaskHandle = xTaskGetCurrentTaskHandle();
+        bSuspended = true;
+    }
+    int TaskReturn = ulTaskNotifyTake(pdTRUE, Timeout);
+    if (TaskReturn == 0) // Give not happened yet (timeout)
+    {
+        return -1;
+    }
+    bCancelInput = false;
     if (!bWantRawInput)
     {
         Print(' ');
@@ -115,6 +123,23 @@ int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput)
         Print('\n');
     }
     return LastInputLength;
+}
+
+void Screen::CancelInput()
+{
+    bCancelInput = true;
+}
+
+bool Screen::ShouldCancelInput()
+{
+    if (bCancelInput)
+    {
+        LastInputLength = 0;
+        bSuspended = false;
+        xTaskNotifyGive(TaskHandle);
+        return true;
+    }
+    return false;
 }
 
 void Screen::AddScreenAddress(char* &Data, int Col, int Row)

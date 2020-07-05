@@ -114,6 +114,10 @@ int NetworkState::GenerateNewPackets(uint8_t *Buffer, bool &bWaitForReply)
     {
         SDLCReadyToRecieve RR(Stream);
         bWaitForReply = true;
+        if (GScreen.ShouldCancelInput())
+        {
+            State = StateSendScreen;
+        }
         break;
     }
     case StateRespond:
