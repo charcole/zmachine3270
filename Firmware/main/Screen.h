@@ -15,6 +15,7 @@ public:
     };
 
     Screen();
+    void Clear();
     void Print(const char* String);
     void Print(char Char);
     void GetCursorPosition(int& X, int& Y);

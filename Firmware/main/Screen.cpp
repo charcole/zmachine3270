@@ -29,10 +29,16 @@ Screen GScreen;
 
 Screen::Screen()
 {
+    Clear();
+}
+
+void Screen::Clear()
+{
     for (int Line = 0; Line < NUM_ROWS; Line++)
     {
         memset(&Row[Line], ' ', sizeof(Row[0]));
     }
+    SetCursorPosition(0,0);
 }
 
 void Screen::Print(const char *String)

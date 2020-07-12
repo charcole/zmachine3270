@@ -26,6 +26,7 @@ extern "C"
 #include "zops.h"
 #include "FrontEnd.h"
 #include "TN3270.h"
+#include "Wikipedia.h"
 
 #ifndef CONFIG_WL_SECTOR_SIZE
 #define CONFIG_WL_SECTOR_SIZE 4096
@@ -369,9 +370,16 @@ void GameTask(void *pvParameters)
 		constexpr int GameSize = 128 * 1024;
 		FrontEnd SelectionScreen;
 		int CurrentGame = SelectionScreen.Show(&GScreen);
-		while (CurrentGame == -1)
+		while (CurrentGame < 0)
 		{
-			TN3270::Run();
+			if (CurrentGame == -1)
+			{
+				TN3270::Run();
+			}
+			else
+			{
+				Wikipedia::Run();
+			}
 			CurrentGame = SelectionScreen.Show(&GScreen);
 		}
 		if (esp_partition_mmap(GamesPartition, CurrentGame * GameSize, GameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
