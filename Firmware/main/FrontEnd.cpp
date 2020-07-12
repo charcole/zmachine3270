@@ -58,6 +58,9 @@ int FrontEnd::Show(Screen* CurrentScreen)
             case 'W':
             case 'w':
                 return -2;
+            case 'S':
+            case 's':
+                return -3;
         }
     }
     return -1;

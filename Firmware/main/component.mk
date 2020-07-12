@@ -7,4 +7,6 @@
 # please read the ESP-IDF documents if you need to do this.
 #
 
-CXXFLAGS := $(CXXFLAGS) -DWITH_LEANER
+COMPONENT_SRCDIRS += libssh2/
+COMPONENT_ADD_INCLUDEDIRS += libssh2/
+

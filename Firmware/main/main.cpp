@@ -27,6 +27,7 @@ extern "C"
 #include "FrontEnd.h"
 #include "TN3270.h"
 #include "Wikipedia.h"
+#include "SSH.h"
 
 #ifndef CONFIG_WL_SECTOR_SIZE
 #define CONFIG_WL_SECTOR_SIZE 4096
@@ -376,9 +377,13 @@ void GameTask(void *pvParameters)
 			{
 				TN3270::Run();
 			}
-			else
+			else if (CurrentGame == -2)
 			{
 				Wikipedia::Run();
+			}
+			else
+			{
+				SSH::Run();
 			}
 			CurrentGame = SelectionScreen.Show(&GScreen);
 		}
