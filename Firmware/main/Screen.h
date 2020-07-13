@@ -21,7 +21,7 @@ public:
     void GetCursorPosition(int& X, int& Y);
     void SetCursorPosition(int X, int Y);
     
-    int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false, int Timeout = portMAX_DELAY);
+    int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false, int Timeout = portMAX_DELAY, bool bPassword = false);
     
     int SerializeScreen3270();
     const char* GetScreen3270Packet(int PacketNum, int& PacketSize)
@@ -67,6 +67,7 @@ private:
     int LastInputLength = 0;
     bool bWordwrap = false;
     bool bRawInputWanted = false;
+    bool bPasswordInput = false;
     bool bCancelInput = false;
     
     volatile char* WaitingInput = nullptr;

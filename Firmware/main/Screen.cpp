@@ -14,6 +14,7 @@ enum
     StartField = 0x1D,
     ProtectedField = 0xF0,
     EditableField = 0x40,
+    PasswordField = 0x4C,
 
     SetAttribute = 0x28,               // Not supported
     FieldAttribute3270 = 0xC0,         // Not supported
@@ -106,12 +107,13 @@ void Screen::Print(char Char)
     }
 }
 
-int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout)
+int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout, bool bPassword)
 {
     if (!bSuspended && !bCancelInput)
     {
         WaitingInput = Input;
         bRawInputWanted = bWantRawInput;
+        bPasswordInput = bPassword;
         TaskHandle = xTaskGetCurrentTaskHandle();
         bSuspended = true;
     }
@@ -124,7 +126,18 @@ int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeou
     if (!bWantRawInput)
     {
         Print(' ');
-        Print(Input);
+        if (bPassword)
+        {
+            char* MaskedInput = Input;
+            while (*(MaskedInput++))
+            {
+                Print('#');
+            }
+        }
+        else
+        {
+            Print(Input);
+        }
         Print('\n');
         Print('\n');
     }
@@ -266,7 +279,7 @@ int Screen::SerializeScreen3270()
                 *(Data++) = SetBufferAddress;
                 AddScreenAddress(Data, CursorCol, Line);
                 *(Data++) = StartField;
-                *(Data++) = EditableField;
+                *(Data++) = bPasswordInput?PasswordField:EditableField;
                 *(Data++) = SetCursor;
                 *(Data++) = RepeatToAddress;
                 AddScreenAddress(Data, NUM_COLS - 1, Line);

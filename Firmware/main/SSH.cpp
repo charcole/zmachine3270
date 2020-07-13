@@ -44,15 +44,12 @@ void SSH::Run()
     char *HostName = nullptr, *PortNum = nullptr, *UserName = nullptr;
     GScreen.Clear();
     GScreen.SetCursorPosition(1 , 0);
-    GScreen.Print("SSH Client");
-    GScreen.SetCursorPosition(0, 1);
+    GScreen.Print("                                     SSH Client");
+    GScreen.SetCursorPosition(0, 2);
     while(!HostName)
     {
-        GScreen.Print("ADDRESS (username@ip[:port]) :");
+        GScreen.Print("ADDRESS (username@ip:port) :");
         GScreen.ReadInput(Address, sizeof(Address));
-        GScreen.Print(' ');
-        GScreen.Print(Address);
-        GScreen.Print('\n');
 
         UserName = Address;
         HostName = strchr(Address, '@');
@@ -65,10 +62,7 @@ void SSH::Run()
 
     char Password[80];
     GScreen.Print("PASSWORD :");
-    GScreen.ReadInput(Password, sizeof(Password));
-    GScreen.Print(' ');
-    GScreen.Print("*********");
-    GScreen.Print('\n');
+    GScreen.ReadInput(Password, sizeof(Password), false, -1, true);
 
     const char *commandline = "uptime";
     
@@ -254,6 +248,6 @@ void SSH::Run()
 
     libssh2_exit();
 
-    GScreen.Print("\nPress Enter to exit\n");
+    GScreen.Print("\nEnter to exit");
     GScreen.ReadInput(ExitMessage, sizeof(ExitMessage));
 }
