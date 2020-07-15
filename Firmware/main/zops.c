@@ -1186,8 +1186,6 @@ void process0OPInstruction()
 				ScreenPrint("Select a file name (filename.qzl):");
 				strcpy(m_input, "/spiflash/");
 				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
-				ScreenPrint(m_input+sizeof("/spiflash/")-1);
-				ScreenPrintChar('\n');
 				// Prime with chunk sizes
 				saveResetStream(&m_savestream);
 				saveState(&m_savestream);
@@ -1211,8 +1209,6 @@ void process0OPInstruction()
 				ScreenPrint("Select a file name (filename.qzl):");
 				strcpy(m_input, "/spiflash/");
 				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
-				ScreenPrint(m_input+sizeof("/spiflash/")-1);
-				ScreenPrintChar('\n');
 				saveResetStream(&m_savestream);
 				m_savestream.f = fopen(m_input, "rb");
 				if (m_savestream.f)
@@ -1673,7 +1669,7 @@ void processVARInstruction()
 			haltInstruction();
 			break;
 		case 0x15: //sound_effect
-			haltInstruction();
+			//haltInstruction();
 			break;
 		case 0x16: //read_char
 			illegalInstruction();

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "game.h"
-
 #ifdef __cplusplus
 extern "C"
 {

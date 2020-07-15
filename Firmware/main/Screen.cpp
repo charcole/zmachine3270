@@ -78,7 +78,8 @@ void Screen::Print(char Char)
             }
             int LastCol = NUM_COLS - 1;
             int MaxLookback = NUM_COLS / 2;
-            while (LastCol > MaxLookback && Row[LastRow].Col[LastCol] != ' ')
+            while (LastCol > MaxLookback && Row[LastRow].Col[LastCol] != ' ' &&
+                   Row[LastRow].Col[LastCol] != ',' && Row[LastRow].Col[LastCol] != '.')
             {
                 LastCol--;
             }
@@ -126,15 +127,7 @@ int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeou
     if (!bWantRawInput)
     {
         Print(' ');
-        if (bPassword)
-        {
-            char* MaskedInput = Input;
-            while (*(MaskedInput++))
-            {
-                Print('#');
-            }
-        }
-        else
+        if (!bPassword)
         {
             Print(Input);
         }
