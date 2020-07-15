@@ -392,11 +392,6 @@ void GameTask(void *pvParameters)
     		ESP_LOGI(TAG, "Playing game from partition");
 		}
 	}
-	if (!GameData)
-	{
-    	ESP_LOGI(TAG, "Playing embedded game");
-		GameData = Game;
-	}
 	zopsMain((const char*)GameData);
 	if (FlashHandle)
 	{
