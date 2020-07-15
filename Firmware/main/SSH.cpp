@@ -190,7 +190,7 @@ void SSH::Run()
         int rc;
         do
         {
-            static char buffer[0x4000];
+            char buffer[1024];
             rc = libssh2_channel_read(channel, buffer, sizeof(buffer));
 
             if (rc > 0)

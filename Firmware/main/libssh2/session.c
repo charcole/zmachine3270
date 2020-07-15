@@ -477,8 +477,7 @@ libssh2_session_init_ex(LIBSSH2_ALLOC_FUNC((*my_alloc)),
     LIBSSH2_ALLOC_FUNC((*local_alloc)) = libssh2_default_alloc;
     LIBSSH2_FREE_FUNC((*local_free)) = libssh2_default_free;
     LIBSSH2_REALLOC_FUNC((*local_realloc)) = libssh2_default_realloc;
-    static LIBSSH2_SESSION Session;
-    LIBSSH2_SESSION *session = &Session;
+    LIBSSH2_SESSION *session = NULL;
 
     if(my_alloc) {
         local_alloc = my_alloc;
@@ -490,9 +489,7 @@ libssh2_session_init_ex(LIBSSH2_ALLOC_FUNC((*my_alloc)),
         local_realloc = my_realloc;
     }
 
-//printf("About to call malloc %d\n", sizeof(LIBSSH2_SESSION));
-//    session = local_alloc(sizeof(LIBSSH2_SESSION), &abstract);
-//printf("After: %p\n", session);
+    session = local_alloc(sizeof(LIBSSH2_SESSION), &abstract);
     if(session) {
         memset(session, 0, sizeof(LIBSSH2_SESSION));
         session->alloc = local_alloc;
@@ -1094,7 +1091,7 @@ session_free(LIBSSH2_SESSION *session)
         LIBSSH2_FREE(session, (char *)session->err_msg);
     }
 
-    //LIBSSH2_FREE(session, session);
+    LIBSSH2_FREE(session, session);
 
     return 0;
 }

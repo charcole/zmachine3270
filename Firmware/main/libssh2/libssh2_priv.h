@@ -162,7 +162,7 @@ static inline int writev(int sock, struct iovec *iov, int nvecs)
  * total packet size of 35000 bytes or less (including length,
  * padding length, payload, padding, and MAC.)."
  */
-#define MAX_SSH_PACKET_LEN 35000
+#define MAX_SSH_PACKET_LEN 4096 // 35000 CC: Only used for output buffer size so we can shrink this
 #define MAX_SHA_DIGEST_LEN SHA512_DIGEST_LENGTH
 
 #define LIBSSH2_ALLOC(session, count) \
@@ -499,7 +499,7 @@ typedef struct _libssh2_endpoint_data
     char *lang_prefs;
 } libssh2_endpoint_data;
 
-#define PACKETBUFSIZE (1024*16)
+#define PACKETBUFSIZE 1024 // (16*1024) CC: Reduce memory use
 
 struct transportpacket
 {
