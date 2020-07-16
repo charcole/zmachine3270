@@ -188,7 +188,7 @@ void TN3270::Process()
                     while (true)
                     {
                         int InputLength = GScreen.ReadInput((char *)DataStream, sizeof(DataStream), true, 20);
-                        if (InputLength > 0) // Allow PF24 to be ignored
+                        if (InputLength > 0)
                         {
                             printf("Got some input\n");
                             for (int InputIndex = 0; InputIndex < InputLength; InputIndex++)

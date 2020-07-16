@@ -64,8 +64,6 @@ void SSH::Run()
     GScreen.Print("PASSWORD :");
     GScreen.ReadInput(Password, sizeof(Password), false, -1, true);
 
-    const char *commandline = "uptime";
-    
     int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (SocketFD == -1)
     {
@@ -173,7 +171,14 @@ void SSH::Run()
         printf("Channel open error\n");
         exit(1);
     }
-    while ((rc = libssh2_channel_exec(channel, commandline)) == LIBSSH2_ERROR_EAGAIN)
+
+    if(libssh2_channel_request_pty(channel, "vanilla") < 0)
+    {
+        // Seems to fail but does work as we have a pseudo terminal
+        //GScreen.Print("Failed requesting PTY\n");
+    }
+
+    while ((rc = libssh2_channel_shell(channel)) == LIBSSH2_ERROR_EAGAIN)
     {
         waitsocket(SocketFD, session);
     }
@@ -183,43 +188,79 @@ void SSH::Run()
         exit(1);
     }
 
+    bool bError = false;
     int bytecount = 0;
-    for (;;)
+    while (!bError && !libssh2_channel_eof(channel))
     {
-        /* loop until we block */
         int rc;
-        do
-        {
-            char buffer[1024];
-            rc = libssh2_channel_read(channel, buffer, sizeof(buffer));
+        char buffer[1024];
 
-            if (rc > 0)
-            {
-                int i;
-                bytecount += rc;
-                for (i = 0; i < rc; ++i)
-                    GScreen.Print(buffer[i]);
-            }
-            else if (rc < 0)
-            {
-                if (rc != LIBSSH2_ERROR_EAGAIN)
-                    /* no need to output this for the EAGAIN case */
-                    printf("libssh2_channel_read returned %d\n", rc);
-            }
-        } while (rc > 0);
-
-        /* this is due to blocking that would occur otherwise so we loop on
-           this condition */
-        if (rc == LIBSSH2_ERROR_EAGAIN)
+        bool bHasCancelledInput = false;
+        while (true)
         {
-            waitsocket(SocketFD, session);
+            int InputLength = GScreen.ReadInput((char *)buffer, sizeof(buffer), false, 20, false, false);
+            if (InputLength > 0)
+            {
+                printf("Got some input\n");
+                buffer[InputLength++] = '\n'; // Add implicit return
+                while ((rc = libssh2_channel_write(channel, buffer, InputLength)) == LIBSSH2_ERROR_EAGAIN)
+                {
+                    vTaskDelay(10);
+                }
+                bError |= (rc < 0);
+                break;
+            }
+            else if (InputLength == 0)
+            {
+                printf("Has cancelled the input\n");
+                break;
+            }
+            else if (InputLength == -1 && !bHasCancelledInput)
+            {
+                struct timeval timeout;
+                fd_set fd;
+                timeout.tv_sec = 0;
+                timeout.tv_usec = 0;
+                FD_ZERO(&fd);
+                FD_SET(SocketFD, &fd);
+                if (select(SocketFD + 1, &fd, NULL, NULL, &timeout) > 0 && FD_ISSET(SocketFD, &fd))
+                {
+                    printf("Cancelling input as we have some more data pending\n");
+                    GScreen.CancelInput();
+                    bHasCancelledInput = true;
+                }
+            }
         }
-        else
+
+        for (int Pass = 0; Pass < 2; Pass++)
         {
-            break;
+            do
+            {
+                if (Pass == 0)
+                    rc = libssh2_channel_read(channel, buffer, sizeof(buffer));
+                else
+                    rc = libssh2_channel_read_stderr(channel, buffer, sizeof(buffer));
+
+                if (rc > 0)
+                {
+                    int i;
+                    bytecount += rc;
+                    for (i = 0; i < rc; ++i)
+                        GScreen.Print(buffer[i]);
+                }
+                else if (rc < 0)
+                {
+                    if (rc != LIBSSH2_ERROR_EAGAIN)
+                    {
+                        /* no need to output this for the EAGAIN case */
+                        printf("libssh2_channel_read returned %d\n", rc);
+                        bError = true;
+                    }
+                }
+            } while (rc > 0);
         }
     }
-    
+
     int exitcode = 127;
     char *exitsignal = (char *)"none";
     while ((rc = libssh2_channel_close(channel)) == LIBSSH2_ERROR_EAGAIN)

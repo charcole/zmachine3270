@@ -108,7 +108,7 @@ void Screen::Print(char Char)
     }
 }
 
-int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout, bool bPassword)
+int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout, bool bPassword, bool bEcho)
 {
     if (!bSuspended && !bCancelInput)
     {
@@ -124,7 +124,11 @@ int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeou
         return -1;
     }
     bCancelInput = false;
-    if (!bWantRawInput)
+    if (LastInputLength < 0) // Successfully cancelled
+    {
+        return 0;
+    }
+    if (!bWantRawInput && bEcho)
     {
         Print(' ');
         if (!bPassword)
@@ -146,7 +150,7 @@ bool Screen::ShouldCancelInput()
 {
     if (bCancelInput)
     {
-        LastInputLength = 0;
+        LastInputLength = -1;
         bSuspended = false;
         xTaskNotifyGive(TaskHandle);
         return true;
