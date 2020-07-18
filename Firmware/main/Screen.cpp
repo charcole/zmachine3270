@@ -371,15 +371,17 @@ void Screen::ConditionalScroll()
     {
         CursorRow = 0;
     }
-    memset(&Row[CursorRow], ' ', sizeof(Row[0]));
-    if (CursorRow == TopLine)
+    if (CursorRow == TopLine) // Shift down status line to preserve it
     {
-        TopLine++;
-        if (TopLine >= NUM_ROWS)
+        int NewTopLine = TopLine + 1;
+        if (NewTopLine >= NUM_ROWS)
         {
-            TopLine = 0;
+            NewTopLine = 0;
         }
+        memcpy(&Row[NewTopLine], &Row[TopLine], sizeof(Row[0]));
+        TopLine = NewTopLine;
     }
+    memset(&Row[CursorRow], ' ', sizeof(Row[0]));
 }
 
 void ScreenPrint(const char* String)
