@@ -2190,7 +2190,7 @@ void processVARInstruction()
 			{
 				if (m_ins.operands[0].value>0 && m_ins.numOps>=2)
 				{
-					m_memStreamPtr=(m_ins.operands[0].value>0 && m_ins.numOps>=2)?m_ins.operands[1].value:0;
+					m_memStreamPtr=(m_ins.operands[0].value>0 && m_ins.numOps>=2)?m_ins.operands[1].value&0xFFFF:0;
 					SetMemory(m_memStreamPtr+0,0);
 					SetMemory(m_memStreamPtr+1,0);
 				}
