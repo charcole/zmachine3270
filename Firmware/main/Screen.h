@@ -20,6 +20,10 @@ public:
     void Print(char Char);
     void GetCursorPosition(int& X, int& Y);
     void SetCursorPosition(int X, int Y);
+    void SetNonScrollingRows(int NumRows)
+    {
+        NonScrollingRows = NumRows;
+    }
     
     int ReadInput(char *Input, int MaxLength, bool bWantRawInput = false, int Timeout = portMAX_DELAY, bool bPassword = false, bool bEcho = true);
     
@@ -65,6 +69,7 @@ private:
     int CursorRow = 0;
     int CursorCol = 0;
     int LastInputLength = 0;
+    int NonScrollingRows = 1;
     bool bWordwrap = false;
     bool bRawInputWanted = false;
     bool bPasswordInput = false;
@@ -86,6 +91,7 @@ void ScreenPrintChar(char Char);
 void ScreenReadInput(char* Input, int MaxLength);
 void ScreenGetCursor(int* CursorX, int* CursorY);
 void ScreenSetCursor(int CursorX, int CursorY);
+void ScreenSetNonScrollRows(int Rows);
 
 #ifdef __cplusplus
 }

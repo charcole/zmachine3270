@@ -75,7 +75,130 @@ void *stackPeek(stack *s)
 	void *ret=(u8*)s->base+s->size*(s->current-1);
 	return ret;
 }
+#define NUM_COLS 80
+#define NUM_ROWS 24
 
+int curWindow=0;
+int splitLines=0;
+int cursorX[3]={0,0,0};
+int cursorY[3]={0,0,0};
+int windowStart[3]={0,0,0};
+
+void ioPrintChar(char c)
+{
+	ScreenPrintChar(c);
+}
+
+void ioSetCursor(int x, int y)
+{
+	ScreenSetCursor(x,y+windowStart[curWindow]);
+}
+
+void ioGetCursor(int* x, int* y)
+{
+	ScreenGetCursor(x,y);
+}
+
+void ioSplitWindow(int numLines)
+{
+	ASSERT(numLines>0);
+	windowStart[0]=numLines+windowStart[1];
+	ScreenSetNonScrollRows(windowStart[0]);
+}
+
+void ioUnsplitWindow()
+{
+	windowStart[0]=windowStart[1];
+	ScreenSetNonScrollRows(windowStart[0]);
+}
+
+int ioSetWindow(int windowNum, int reset)
+{
+	int oldWindow=curWindow;
+	ASSERT(windowNum>=0 && windowNum<=2);
+	ioGetCursor(&cursorX[oldWindow],&cursorY[oldWindow]);
+	curWindow=windowNum;
+	if (reset)
+	{
+		cursorX[curWindow]=0;
+		cursorY[curWindow]=0;
+	}
+	ioSetCursor(cursorX[curWindow],cursorY[curWindow]);
+	return oldWindow;
+}
+
+void ioEraseWindow(int windowNum)
+{
+	int i;
+	ioGetCursor(&cursorX[curWindow],&cursorY[curWindow]);
+	switch (windowNum)
+	{
+	case 0:
+		for (i=windowStart[0];i<NUM_ROWS;i++)
+		{
+			int x;
+			ioSetCursor(0,i);
+			for (x=0; x<NUM_COLS; x++)
+			{
+				ScreenPrintChar(' ');
+			}
+		}
+		break;
+	case 1:
+	case 2:
+		for (i=windowStart[windowNum];i<windowStart[windowNum-1];i++)
+		{
+			int x;
+			ioSetCursor(0,i);
+			for (x=0; x<NUM_COLS; x++)
+			{
+				ScreenPrintChar(' ');
+			}
+		}
+		break;
+	default:
+		printf("Invalid erase window %d\n", windowNum);
+		break;
+	}
+	ioSetCursor(cursorX[curWindow],cursorY[curWindow]);
+}
+
+void ioEraseToEndOfLine()
+{
+	int i;
+	ioGetCursor(&cursorX[curWindow],&cursorY[curWindow]);
+	for (i=cursorX[curWindow]; i<80; i++)
+	{
+		ScreenPrintChar(' ');
+	}
+	ioSetCursor(cursorX[curWindow],cursorY[curWindow]);
+}
+
+void ioSetStyleBits(int bits)
+{
+}
+
+void ioClearStyleBits()
+{
+}
+
+void ioReset(int bHasStatus)
+{
+	curWindow=0;
+	windowStart[2]=0;
+	windowStart[1]=bHasStatus?1:0;
+	windowStart[0]=windowStart[1];
+	cursorX[0]=0;
+	cursorX[1]=0;
+	cursorX[2]=0;
+	cursorY[0]=NUM_ROWS-1;
+	cursorY[1]=0;
+	cursorY[2]=0;
+	ioEraseWindow(2);
+	ioEraseWindow(0);
+}
+
+#define FROTZ_WATCHING 0 // Similar to Frotz's -a -A -o -O flags
 #define MAX_TOKEN_LEN 24
 
 enum
@@ -89,18 +212,25 @@ enum
 	Form0OP,
 	Form1OP,
 	Form2OP,
-	FormVAR
+	FormVAR,
+	FormEXT
 };
 
 static int zeroOpStoreInstructions[]={};
+static int zeroOpStoreInstructionsV4[]={0x05,0x06,0x09};
 static int oneOpStoreInstructions[]={0x01,0x02,0x03,0x04,0x08,0x0E,0x0F};
+static int oneOpStoreInstructionsV5[]={0x01,0x02,0x03,0x04,0x08,0x0E};
 static int twoOpStoreInstructions[]={0x08,0x09,0x0F,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19};
 static int varOpStoreInstructions[]={0x00,0x07,0x0C,0x16,0x17,0x18};
+static int varOpStoreInstructionsV5[]={0x00,0x04,0x07,0x0C,0x16,0x17,0x18};
+static int extOpStoreInstructions[]={0x00,0x01,0x02,0x03,0x04,0x09,0x0A};
 
 static int zeroOpBranchInstructions[]={0x05,0x06,0x0D,0x0F};
+static int zeroOpBranchInstructionsV4[]={0x0D,0x0F};
 static int oneOpBranchInstructions[]={0x00,0x01,0x02};
 static int twoOpBranchInstructions[]={0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x0A};
 static int varOpBranchInstructions[]={0x17,0x1F};
+static int extOpBranchInstructions[]={};
 	
 static char alphabetLookup[3][27]={
 	{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' },
@@ -127,7 +257,7 @@ typedef struct ZInstruction_s
 	int store;
 	int numOps;
 	ZBranch branch;
-	ZOperand operands[4];
+	ZOperand operands[8];
 } ZInstruction;
 
 typedef struct ZCallStack_s
@@ -161,7 +291,7 @@ typedef struct ZToken_s
 	
 typedef struct ZDictEntry_s
 {
-	int coded[4];
+	int coded[6];
 	int current;
 } ZDictEntry;
 
@@ -188,20 +318,27 @@ static int m_abbrevTable;
 static int m_objectTable;
 static int m_dictionaryTable;
 static int m_endOfDynamic;
+static int m_version;
+static int m_packedMultiplier;
 static const byte *memory;
-static byte *dynamic;
 static s16 m_numberstack[256];
 static stack m_stack;
 static ZCallStack m_callstackcontents[96];
 static stack m_callStack;
 static SaveStream m_savestream;
+static int m_memStreamPtr;
+static int m_outputStream;
 static char m_input[128];
+
+#define DYNAMIC_CHUNK 1024
+#define DYNAMIC(x) dynamicChunks[x/DYNAMIC_CHUNK][x&(DYNAMIC_CHUNK-1)]
+static byte *dynamicChunks[64];
 
 byte ReadMemory(int Address)
 {
 	if (Address < m_endOfDynamic)
 	{
-		return dynamic[Address];
+		return DYNAMIC(Address);
 	}
 	return memory[Address];
 }
@@ -209,7 +346,7 @@ byte ReadMemory(int Address)
 void SetMemory(int Address, byte Value)
 {
 	ASSERT(Address < m_endOfDynamic);
-	dynamic[Address] = Value;
+	DYNAMIC(Address) = Value;
 }
 
 int makeS16(int msb, int lsb)
@@ -299,9 +436,83 @@ int readVariableIndirect(int var)
 ZObject getObject(int id)
 {
 	ZObject ret;
-	ret.addr=m_objectTable+2*31+9*(id-1);
-	ret.propTable=makeU16(ReadMemory(ret.addr+7)&0xFF, ReadMemory(ret.addr+8)&0xFF);
+	if (m_version<=3)
+	{
+		ret.addr=m_objectTable+2*31+9*(id-1);
+		ret.propTable=makeU16(ReadMemory(ret.addr+7)&0xFF, ReadMemory(ret.addr+8)&0xFF);
+	}
+	else
+	{
+		ret.addr=m_objectTable+2*63+14*(id-1);
+		ret.propTable=makeU16(ReadMemory(ret.addr+12)&0xFF, ReadMemory(ret.addr+13)&0xFF);
+	}
 	return ret;
+}
+
+int zobjectGetParent(ZObject obj)
+{
+	if (m_version<=3)
+	{
+		return ReadMemory(obj.addr+4)&0xFF;
+	}
+	return makeU16(ReadMemory(obj.addr+6)&0xFF, ReadMemory(obj.addr+7)&0xFF);
+}
+
+int zobjectGetSibling(ZObject obj)
+{
+	if (m_version<=3)
+	{
+		return ReadMemory(obj.addr+5)&0xFF;
+	}
+	return makeU16(ReadMemory(obj.addr+8)&0xFF, ReadMemory(obj.addr+9)&0xFF);
+}
+
+int zobjectGetChild(ZObject obj)
+{
+	if (m_version<=3)
+	{
+		return ReadMemory(obj.addr+6)&0xFF;
+	}
+	return makeU16(ReadMemory(obj.addr+10)&0xFF, ReadMemory(obj.addr+11)&0xFF);
+}
+
+void zobjectSetParent(ZObject obj, int id)
+{
+	if (m_version<=3)
+	{
+		SetMemory(obj.addr+4,id);
+	}
+	else
+	{
+		SetMemory(obj.addr+6,(id/256)&0xFF);
+		SetMemory(obj.addr+7,id&0xFF);
+	}
+}
+
+void zobjectSetSibling(ZObject obj, int id)
+{
+	if (m_version<=3)
+	{
+		SetMemory(obj.addr+5,id);
+	}
+	else
+	{
+		SetMemory(obj.addr+8,(id/256)&0xFF);
+		SetMemory(obj.addr+9,id&0xFF);
+	}
+}
+
+void zobjectSetChild(ZObject obj, int id)
+{
+	if (m_version<=3)
+	{
+		SetMemory(obj.addr+6,id);
+	}
+	else
+	{
+		SetMemory(obj.addr+10,(id/256)&0xFF);
+		SetMemory(obj.addr+11,id&0xFF);
+	}
 }
 
 ZProperty getProperty(ZObject obj, int id)
@@ -313,8 +524,26 @@ ZProperty getProperty(ZObject obj, int id)
 	while (ReadMemory(address)!=0)
 	{
 		int sizeId=ReadMemory(address++)&0xFF;
-		int size=1+(sizeId>>5);
-		int propId=sizeId&31;
+		int size, propId;
+		if (m_version<=3)
+		{
+			size=1+(sizeId>>5);
+			propId=sizeId&31;
+		}
+		else
+		{
+			propId=sizeId&63;
+			if (sizeId&0x80)
+			{
+				size=(ReadMemory(address++)&0xFF)&63;
+				if (size==0)
+					size=64;
+			}
+			else
+			{
+				size=(sizeId&0x40)?2:1;
+			}
+		}
 		if (propId==id)
 		{
 			ret.addr=address;
@@ -358,6 +587,24 @@ void doBranch(int cond, ZBranch branch)
 			returnRoutine(1);
 		else
 			m_pc+=branch.offset-2;
+	}
+}
+
+void printToStream(char Value)
+{
+	if (m_memStreamPtr && Value!=0)
+	{
+		int Length = makeU16(ReadMemory(m_memStreamPtr)&0xFF,ReadMemory(m_memStreamPtr+1)&0xFF);
+		Length++;
+		SetMemory(m_memStreamPtr+0,Length>>8);
+		SetMemory(m_memStreamPtr+1,Length&0xFF);
+		if (Value=='\n')
+			Value='\r';
+		SetMemory(m_memStreamPtr+1+Length,Value);
+	}
+	else if (m_outputStream)
+	{
+		ioPrintChar(Value);
 	}
 }
 
@@ -410,12 +657,28 @@ void readVariableForm(int opcode)
 {
 	int op=opcode&31;
 	int operandTypes=readBytePC();
+	int operandTypes2=0xFF;
 	int i;
 	m_ins.op=op;
 	if ((opcode&0xF0)>=0xE0)
 		m_ins.form=FormVAR;
 	else
 		m_ins.form=Form2OP;
+	if (m_ins.form==FormVAR && (op==0xC || op==0x1A))
+		operandTypes2=readBytePC();
+	for (i=3; i>=0; i--)
+		readOperand((operandTypes>>(2*i))&3);
+	for (i=3; i>=0; i--)
+		readOperand((operandTypes2>>(2*i))&3);
+}
+
+void readExtendedForm()
+{
+	int op=readBytePC();
+	int operandTypes=readBytePC();
+	int i;
+	m_ins.op=op;
+	m_ins.form=FormEXT;
 	for (i=3; i>=0; i--)
 	{
 		readOperand((operandTypes>>(2*i))&3);
@@ -473,7 +736,8 @@ void callRoutine(int address, int returnStore, int setOperands)
 {
 	if (address==0)
 	{
-		setVariable(returnStore, 0);
+		if (returnStore>=0)
+			setVariable(returnStore, 0);
 	}
 	else
 	{
@@ -484,10 +748,17 @@ void callRoutine(int address, int returnStore, int setOperands)
 		cs.returnStore=returnStore;
 		cs.setArguments=(setOperands?(1<<(m_ins.numOps-1))-1:0);
 		cs.numLocals=numLocals;
-		for (i=0; i<numLocals; i++)
+		if (m_version>=5)
 		{
-			cs.locals[i]=makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF);
-			address+=2;
+			memset(cs.locals, 0, cs.numLocals*sizeof(cs.locals[0]));
+		}
+		else
+		{
+			for (i=0; i<numLocals; i++)
+			{
+				cs.locals[i]=makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF);
+				address+=2;
+			}
 		}
 		if (setOperands)
 		{
@@ -506,7 +777,7 @@ void displayState()
 {
 	int i;
 	printf("Next PC:%x\n", m_pc);
-	printf("Form:%d Opcode:%d\n", m_ins.form, m_ins.op);
+	printf("Form:%x Opcode:%x\n", m_ins.form, m_ins.op);
 	printf("Num operands: %d\n", m_ins.numOps);
 	for (i=0; i<m_ins.numOps; i++)
 	{
@@ -518,6 +789,7 @@ void displayState()
 void dumpCurrentInstruction()
 {
 	int i;
+	printf("Form:%x Opcode:%x\n", m_ins.form, m_ins.op);
 	for (i=0; i<m_ins.numOps; i++)
 	{ 
 		printf("Arg:%d Value:%d\n", i, (m_ins.operands[i].value&0xFFFF));
@@ -565,7 +837,7 @@ int printText(int address)
 				longNext--;
 				if (longNext==0)
 				{
-					ScreenPrintChar((char)longChar);
+					printToStream((char)longChar);
 				}
 			}
 			else if (!abbrNext)
@@ -578,7 +850,7 @@ int printText(int address)
 				else if (characters[i]>=6)
 				{
 					characters[i]-=6;
-					ScreenPrintChar(alphabetLookup[alphabet][characters[i]]);
+					printToStream(alphabetLookup[alphabet][characters[i]]);
 					alphabet=0;
 				}
 				else if (characters[i]==4)
@@ -591,7 +863,7 @@ int printText(int address)
 				}
 				else if (characters[i]==0)
 				{
-					ScreenPrintChar(' ');
+					printToStream(' ');
 				}
 				else
 				{
@@ -615,24 +887,24 @@ int printText(int address)
 void removeObject(int childId)
 {
 	ZObject child=getObject(childId);
-	int parentId=ReadMemory(child.addr+4)&0xFF;
+	int parentId=zobjectGetParent(child);
 	if (parentId!=0)
 	{
 		ZObject parent=getObject(parentId);
-		if ((ReadMemory(parent.addr+6)&0xFF)==childId)
+		if (zobjectGetChild(parent)==childId)
 		{
-			SetMemory(parent.addr+6, ReadMemory(child.addr+5)); // parent.child=child.sibling
+			zobjectSetChild(parent, zobjectGetSibling(child));
 		}
 		else
 		{
-			int siblingId=ReadMemory(parent.addr+6)&0xFF;
+			int siblingId=zobjectGetChild(parent);
 			while (siblingId!=0)
 			{
 				ZObject sibling=getObject(siblingId);
-				int nextSiblingId=ReadMemory(sibling.addr+5)&0xFF;
+				int nextSiblingId=zobjectGetSibling(sibling);
 				if (nextSiblingId==childId)
 				{
-					SetMemory(sibling.addr+5, ReadMemory(child.addr+5)); // sibling.sibling=child.sibling
+					zobjectSetSibling(sibling, zobjectGetSibling(child));
 					break;
 				}
 				siblingId=nextSiblingId;
@@ -642,8 +914,8 @@ void removeObject(int childId)
 				illegalInstruction();
 			}
 		}
-		SetMemory(child.addr+4, 0);
-		SetMemory(child.addr+5, 0);
+		zobjectSetParent(child,0);
+		zobjectSetSibling(child,0);
 	}
 }
 
@@ -651,9 +923,9 @@ void addChild(int parentId, int childId)
 {
 	ZObject child=getObject(childId);
 	ZObject parent=getObject(parentId);
-	SetMemory(child.addr+5, ReadMemory(parent.addr+6)); // child.sibling=parent.child
-	SetMemory(child.addr+4, (byte)parentId); // child.parent=parent
-	SetMemory(parent.addr+6, (byte)childId); // parent.child=child
+	zobjectSetSibling(child, zobjectGetChild(parent));
+	zobjectSetParent(child, parentId);
+	zobjectSetChild(parent, childId);
 }
 
 void zDictInit(ZDictEntry *entry)
@@ -661,8 +933,10 @@ void zDictInit(ZDictEntry *entry)
 	entry->current=0;
 	entry->coded[0]=0;
 	entry->coded[1]=0;
-	entry->coded[2]=0x80;
+	entry->coded[2]=(m_version>3?0:0x80);
 	entry->coded[3]=0;
+	entry->coded[4]=(m_version>3?0x80:0);
+	entry->coded[5]=0;
 }
 
 void zDictAddCharacter(ZDictEntry *entry, int code)
@@ -676,6 +950,9 @@ void zDictAddCharacter(ZDictEntry *entry, int code)
 		case 3: entry->coded[2]|=code<<2; break;
 		case 4: entry->coded[2]|=code>>3; entry->coded[3]|=(code<<5)&0xFF; break;
 		case 5: entry->coded[3]|=code; break;
+		case 6: entry->coded[4]|=code<<2; break;
+		case 7: entry->coded[4]|=code>>3; entry->coded[5]|=(code<<5)&0xFF; break;
+		case 8: entry->coded[5]|=code; break;
 	}
 	entry->current++;
 }
@@ -722,7 +999,7 @@ ZDictEntry encodeToken(char* token)
 			zDictAddCharacter(&ret, code+6);
 		}
 	}
-	for (t=0; t<6; t++) // pad
+	for (t=0; t<9; t++) // pad
 	{
 		zDictAddCharacter(&ret, 5);
 	}
@@ -732,32 +1009,36 @@ ZDictEntry encodeToken(char* token)
 int getDictionaryAddress(char* token, int dictionary)
 {
 	int entryLength = ReadMemory(dictionary++)&0xFF;
-	int numEntries = makeU16(ReadMemory(dictionary+0)&0xFF, ReadMemory(dictionary+1)&0xFF);
+	int numEntries = abs(makeS16(ReadMemory(dictionary+0)&0xFF, ReadMemory(dictionary+1)&0xFF));
 	ZDictEntry zde = encodeToken(token);
 	int i;
 	dictionary+=2;
 	for (i=0; i<numEntries; i++)
 	{
-		if (zde.coded[0]==(ReadMemory(dictionary+0)&0xFF) && zde.coded[1]==(ReadMemory(dictionary+1)&0xFF)
-				&& zde.coded[2]==(ReadMemory(dictionary+2)&0xFF) && zde.coded[3]==(ReadMemory(dictionary+3)&0xFF))
+		if (zde.coded[0]==(ReadMemory(dictionary+0)&0xFF) && zde.coded[1]==(ReadMemory(dictionary+1)&0xFF) &&
+			zde.coded[2]==(ReadMemory(dictionary+2)&0xFF) && zde.coded[3]==(ReadMemory(dictionary+3)&0xFF))
 		{
-			return dictionary;
+			if (m_version<=3 || (zde.coded[4]==(ReadMemory(dictionary+4)&0xFF) && zde.coded[5]==(ReadMemory(dictionary+5)&0xFF)))
+			{
+				return dictionary;
+			}
 		}
 		dictionary+=entryLength;
 	}
 	return 0;
 }
 
-int lexicalAnalysis(char* input, int parseBuffer, int maxEntries)
+void lexicalAnalysis(char* input, int parseBuffer, int dictionaryAddress, int ignoreUnknown)
 {
 	static ZToken tokens[64];
 	static char seps[32];
 	int numTokens=0;
-	int dictionaryAddress=m_dictionaryTable;
 	int numSeperators=ReadMemory(dictionaryAddress++);
 	char *current=input;
 	char *end=input+strlen(current);
 	int i;
+	int maxEntries=ReadMemory(parseBuffer++)&0xFF;
+	int parseReturn=parseBuffer++;
 	ASSERT(maxEntries <= ARRAY_SIZEOF(tokens));
 	ASSERT(numSeperators <= ARRAY_SIZEOF(seps));
 	for (i=0; i<numSeperators; i++)
@@ -813,46 +1094,64 @@ int lexicalAnalysis(char* input, int parseBuffer, int maxEntries)
 	for (i=0; i<numTokens && i<maxEntries; i++)
 	{
 		int outAddress=getDictionaryAddress(tokens[i].token, dictionaryAddress);
-		SetMemory(parseBuffer++, (byte)((outAddress>>8)&0xFF));
-		SetMemory(parseBuffer++, (byte)((outAddress>>0)&0xFF));
-		SetMemory(parseBuffer++, (byte)strlen(tokens[i].token));
-		SetMemory(parseBuffer++, (byte)(tokens[i].offset+1));
+		if (!ignoreUnknown || outAddress!=0)
+		{
+			SetMemory(parseBuffer++, (byte)((outAddress>>8)&0xFF));
+			SetMemory(parseBuffer++, (byte)((outAddress>>0)&0xFF));
+			SetMemory(parseBuffer++, (byte)strlen(tokens[i].token));
+			SetMemory(parseBuffer++, (byte)(tokens[i].offset+(m_version>=5?2:1)));
+		}
+		else
+		{
+			parseBuffer+=4;
+		}
 	}
 
-	return MIN(maxEntries, numTokens);
+	SetMemory(parseReturn,(byte)MIN(maxEntries, numTokens));
 }
 
 void updateStatus()
 {
-	int objectId = readVariable(16);
-	int score = readVariable(17);
-	int turns = readVariable(18);
-	ZObject room = getObject(objectId);
-
-	int CursorX, CursorY, StatusX, StatusY;
-	char ScoreString[16];
-	ScreenGetCursor(&CursorX, &CursorY);
-	ScreenSetCursor(1, 0); // 1 as leftmost character used for character attribute
-	printText(room.propTable + 1);
-	ScreenGetCursor(&StatusX, &StatusY);
-	while (StatusX < 68)
+	if (m_version<=3 && (ReadMemory(1) & (1<<4)) == 0)
 	{
-		ScreenPrintChar(' ');
-		StatusX++;
-	}
-	if (ReadMemory(1) & (1<<1)) // Time game
-	{
-		sprintf(ScoreString, "Time: %02d:%02d", score, turns);
-	}
-	else
-	{
-		if (score >= 0)
-			sprintf(ScoreString, "Score: %04d", score);
+		int objectId=readVariable(16);
+		int score=readVariable(17);
+		int turns=readVariable(18);
+		ZObject room=getObject(objectId);
+		int statusX,statusY;
+		char scoreString[32];
+		char* scorePtr=scoreString;
+		int oldWindow=ioSetWindow(2, TRUE);
+		ioEraseWindow(2);
+		ioSetStyleBits(1);
+		ioPrintChar(' ');
+		ASSERT(m_memStreamPtr==0);
+		printText(room.propTable+1);
+		ioGetCursor(&statusX,&statusY);
+		while (statusX<69)
+		{
+			ioPrintChar(' ');
+			statusX++;
+		}
+		if (ReadMemory(1)&(1<<1)) // Time game
+		{
+			sprintf(scoreString, "Time: %02d:%02d", score, turns);
+		}
 		else
-			sprintf(ScoreString, "Score: %03d", score);
+		{
+			if (score>=0)
+				sprintf(scoreString, "Score: %04d", score);
+			else
+				sprintf(scoreString, "Score: %03d", score);
+		}
+		while (*scorePtr)
+		{
+			ioPrintChar(*scorePtr++);
+		}
+		ioPrintChar(' ');
+		ioClearStyleBits();
+		ioSetWindow(oldWindow, FALSE);
 	}
-	ScreenPrint(ScoreString);
-	ScreenSetCursor(CursorX, CursorY);
 }
 
 void saveResetStream(SaveStream* stream)
@@ -889,7 +1188,7 @@ void saveDynamicMemory(SaveStream* stream)
 	int ZeroRun = 0;
 	for (int i=0; i<m_endOfDynamic; i++)
 	{
-		uint8_t Diff = memory[i] ^ dynamic[i];
+		uint8_t Diff = memory[i] ^ DYNAMIC(i);
 		if (Diff == 0)
 		{
 			ZeroRun++;
@@ -1090,30 +1389,40 @@ int restoreState(SaveStream* stream)
 		}
 		else if (ChunkId[0]=='C' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
 		{
-			char* DynamicData = dynamic;
-			memcpy(DynamicData,memory,m_endOfDynamic);
+			int i;
+			for (i=0; i<m_endOfDynamic; i++)
+			{
+				DYNAMIC(i) = memory[i];
+			}
+			i=0;
 			while (stream->pos<ChunkEnd)
 			{
 				unsigned char Value=readByte(stream);
 				if (Value==0x00)
 				{
 					int Length=readByte(stream)+1;
-					DynamicData+=Length;
+					i+=Length;
 				}
 				else
 				{
-					*(DynamicData++)^=Value;
+					DYNAMIC(i) ^= Value;
+					i++;
 				}
 			}
 			bFoundMem=TRUE;
 		}
 		else if (ChunkId[0]=='U' && ChunkId[1]=='M' && ChunkId[2]=='e' && ChunkId[3]=='m')
 		{
-			char* DynamicData = dynamic;
-			memcpy(DynamicData,memory,m_endOfDynamic);
+			int i;
+			for (i=0; i<m_endOfDynamic; i++)
+			{
+				DYNAMIC(i) = memory[i];
+			}
+			i=0;
 			while (stream->pos<ChunkEnd)
 			{
-				*(DynamicData++)=readByte(stream);
+				DYNAMIC(i) = readByte(stream);
+				i++;
 			}
 			bFoundMem=TRUE;
 		}
@@ -1161,6 +1470,69 @@ int restoreState(SaveStream* stream)
 	return (bFoundHeader && bFoundMem && bFoundStacks);
 }
 
+void saveInstruction()
+{
+	char *input=m_input;
+	printf("\nSelect a file name (filename.qzl):");
+	fgets(m_input, sizeof(m_input), stdin);
+	while (*input && *input!='\n' && *input!='\r') input++;
+	*input='\0';
+	// Prime with chunk sizes
+	saveResetStream(&m_savestream);
+	saveState(&m_savestream);
+	// Actually write to file
+	saveResetStream(&m_savestream);
+	m_savestream.f=fopen(m_input,"wb");
+	if (m_savestream.f)
+	{
+		saveState(&m_savestream);
+		fclose(m_savestream.f);
+	}
+	if (m_version>=4)
+		setVariable(m_ins.store, m_savestream.f?1:0);
+	else
+		doBranch(m_savestream.f!=NULL, m_ins.branch);
+}
+
+void restoreInstruction()
+{
+	char *input=m_input;
+	printf("\nSelect a file name (filename.qzl):");
+	fgets(m_input, sizeof(m_input), stdin);
+	while (*input && *input!='\n' && *input!='\r') input++;
+	*input='\0';
+	saveResetStream(&m_savestream);
+	m_savestream.f = fopen(m_input, "rb");
+	if (m_savestream.f)
+	{
+		if (restoreState(&m_savestream))
+		{
+			fclose(m_savestream.f);
+			if (m_version==4)
+			{
+				m_ins.store=readStoreInstruction(zeroOpStoreInstructionsV4,ARRAY_SIZEOF(zeroOpStoreInstructionsV4),m_ins.op);
+				setVariable(m_ins.store, 2);
+			}
+			else if (m_version>=5)
+			{
+				m_ins.store=readStoreInstruction(extOpStoreInstructions,ARRAY_SIZEOF(extOpStoreInstructions),m_ins.op);
+				setVariable(m_ins.store, 2);
+			}
+			else
+			{
+				m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),5);
+				doBranch(TRUE, m_ins.branch);
+			}
+			return;
+		}
+		fclose(m_savestream.f);
+	}
+	if (m_version>=4)
+		setVariable(m_ins.store, 0);
+	else
+		doBranch(FALSE, m_ins.branch);
+}
+
 void process0OPInstruction()
 {
 	switch (m_ins.op)
@@ -1176,69 +1548,34 @@ void process0OPInstruction()
 			break;
 		case 3: //print_ret
 			m_pc=printText(m_pc);
-			ScreenPrintChar('\n');
+			printToStream('\n');
 			returnRoutine(1);
 			break;
 		case 4: //nop
 			break;
 		case 5: //save
-			{
-				ScreenPrint("Select a file name (filename.qzl):");
-				strcpy(m_input, "/spiflash/");
-				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
-				// Prime with chunk sizes
-				saveResetStream(&m_savestream);
-				saveState(&m_savestream);
-				// Actually write to file
-				saveResetStream(&m_savestream);
-				m_savestream.f=fopen(m_input,"wb");
-				if (m_savestream.f)
-				{
-					saveState(&m_savestream);
-					fclose(m_savestream.f);
-					doBranch(TRUE, m_ins.branch);
-				}
-				else
-				{
-					doBranch(FALSE, m_ins.branch);
-				}
-				break;
-			}
+			saveInstruction();
+			break;
 		case 6: //restore
-			{
-				ScreenPrint("Select a file name (filename.qzl):");
-				strcpy(m_input, "/spiflash/");
-				ScreenReadInput(m_input+sizeof("/spiflash/")-1, sizeof(m_input)-sizeof("/spiflash/"));
-				saveResetStream(&m_savestream);
-				m_savestream.f = fopen(m_input, "rb");
-				if (m_savestream.f)
-				{
-					if (restoreState(&m_savestream))
-					{
-						fclose(m_savestream.f);
-						m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),5);
-						doBranch(TRUE, m_ins.branch);
-						break;
-					}
-					fclose(m_savestream.f);
-				}
-				doBranch(FALSE, m_ins.branch);
-				break;
-			}
+			restoreInstruction();
+			break;
 		case 7: //restart
 			haltInstruction();
 			break;
 		case 8: //ret_popped
 			returnRoutine(*(s16*)stackPop(&m_stack));
 			break;
-		case 9: //pop
-			stackPop(&m_stack);
+		case 9:
+			if (m_version<5)
+				stackPop(&m_stack); // pop
+			else
+				setVariable(m_ins.store, stackDepth(&m_callStack)); // catch
 			break;
 		case 0xA: //quit
 			exit(0);
 			break;
 		case 0xB: //new_line
-			ScreenPrintChar('\n');
+			printToStream('\n');
 			break;
 		case 0xC: //show_status
 			updateStatus();
@@ -1264,31 +1601,80 @@ void process1OPInstruction()
 			break;
 		case 1: //get_sibling
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store, 0);
+					doBranch(FALSE, m_ins.branch);
+					break;
+				}
 				ZObject child=getObject(m_ins.operands[0].value);
-				int siblingId=ReadMemory(child.addr+5)&0xFF;
+				int siblingId=zobjectGetSibling(child);
 				setVariable(m_ins.store, siblingId);
 				doBranch(siblingId!=0, m_ins.branch);
+#if FROTZ_WATCHING
+				printf("@get_sibling ");
+				printText(child.propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 2: //get_child
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store, 0);
+					doBranch(FALSE, m_ins.branch);
+					break;
+				}
 				ZObject child=getObject(m_ins.operands[0].value);
-				int childId=ReadMemory(child.addr+6)&0xFF;
+				int childId=zobjectGetChild(child);
 				setVariable(m_ins.store, childId);
 				doBranch(childId!=0, m_ins.branch);
+#if FROTZ_WATCHING
+				printf("@get_child ");
+				printText(child.propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 3: //get_parent_object
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store, 0);
+					break;
+				}
 				ZObject child=getObject(m_ins.operands[0].value);
-				setVariable(m_ins.store, ReadMemory(child.addr+4)&0xFF);
+				setVariable(m_ins.store, zobjectGetParent(child));
+#if FROTZ_WATCHING
+				printf("@get_parent ");
+				printText(child.propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 4: //get_prop_len
 			{
-				int propAddress=(m_ins.operands[0].value&0xFFFF)-1;
-				int sizeId=ReadMemory(propAddress)&0xFF;
-				int size=(sizeId>>5)+1;
+				int propAddress=(m_ins.operands[0].value&0xFFFF);
+				int size=0;
+				if (propAddress>0)
+				{
+					int sizeId=ReadMemory(propAddress-1)&0xFF;
+					size=(sizeId>>5)+1;
+					if (m_version>3)
+					{
+						if (sizeId&0x80)
+						{
+							size=sizeId&63;
+							if (size==0)
+								size=64;
+						}
+						else
+						{
+							size=(sizeId&0x40)?2:1;
+						}
+					}
+				}
 				setVariable(m_ins.store, size);
 				break;
 			}
@@ -1308,15 +1694,24 @@ void process1OPInstruction()
 			printText(m_ins.operands[0].value);
 			break;
 		case 8: //call_1s
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 9: //remove_obj
 			{
+				if (m_ins.operands[0].value==0)
+					break;
 				removeObject(m_ins.operands[0].value);
+#if FROTZ_WATCHING
+				printf("@remove_obj ");
+				printText(getObject(m_ins.operands[0].value).propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 0xA: //print_obj
 			{
+				if (m_ins.operands[0].value==0)
+					break;
 				ZObject obj=getObject(m_ins.operands[0].value);
 				printText(obj.propTable+1);
 				break;
@@ -1328,13 +1723,16 @@ void process1OPInstruction()
 			m_pc+=m_ins.operands[0].value-2;
 			break;
 		case 0xD: //print_paddr
-			printText(2*(m_ins.operands[0].value&0xFFFF));
+			printText(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF));
 			break;
 		case 0xE: //load
 			setVariable(m_ins.store, readVariableIndirect(m_ins.operands[0].value));
 			break;
-		case 0xF: //not
-			setVariable(m_ins.store, ~m_ins.operands[0].value);
+		case 0xF:
+			if (m_version<=4)
+				setVariable(m_ins.store, ~m_ins.operands[0].value); //not
+			else
+				callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE); //call_1n
 			break;
 	}
 }
@@ -1370,7 +1768,7 @@ void process2OPInstruction()
 			break;
 		case 4: //dec_chk
 			{
-				int value=readVariable(m_ins.operands[0].value);
+				short value=readVariable(m_ins.operands[0].value);
 				value--;
 				setVariable(m_ins.operands[0].value, value);
 				doBranch(value<m_ins.operands[1].value, m_ins.branch);
@@ -1378,7 +1776,7 @@ void process2OPInstruction()
 			}	
 		case 5: //inc_chk
 			{
-				int value=readVariable(m_ins.operands[0].value);
+				short value=readVariable(m_ins.operands[0].value);
 				value++;
 				setVariable(m_ins.operands[0].value, value);
 				doBranch(value>m_ins.operands[1].value, m_ins.branch);
@@ -1386,8 +1784,21 @@ void process2OPInstruction()
 			}
 		case 6: //jin
 			{
+				if (m_ins.operands[0].value==0 || m_ins.operands[1].value==0)
+				{
+					// strict.z5 wants us to return nothing is in nothing
+					doBranch(m_ins.operands[0].value==m_ins.operands[1].value, m_ins.branch);
+					break;
+				}
 				ZObject child=getObject(m_ins.operands[0].value);
-				doBranch((ReadMemory(child.addr+4)&0xFF)==m_ins.operands[1].value, m_ins.branch);
+				doBranch(zobjectGetParent(child)==m_ins.operands[1].value, m_ins.branch);
+#if FROTZ_WATCHING
+				printf("@jin ");
+				printText(child.propTable+1);
+				printf(" ");
+				printText(getObject(m_ins.operands[1].value).propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 7: //test
@@ -1404,29 +1815,58 @@ void process2OPInstruction()
 			break;
 		case 0xA: //test_attr
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					doBranch(FALSE, m_ins.branch);
+					break;
+				}
 				ZObject obj=getObject(m_ins.operands[0].value);
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				doBranch((ReadMemory(obj.addr+offset)&bit)==bit, m_ins.branch);
+				int test=FALSE;
+				if (attr<32 || (m_version>3 && attr<48))
+					test=((ReadMemory(obj.addr+offset)&bit)==bit);
+				doBranch(test, m_ins.branch);
+#if FROTZ_WATCHING
+				printf("@test_attr ");
+				printText(obj.propTable+1);
+				printf(" %d\n", attr);
+#endif
 				break;
 			}
 		case 0xB: //set_attr
 			{
+				if (m_ins.operands[0].value==0)
+					break;
 				ZObject obj=getObject(m_ins.operands[0].value);
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)|bit);
+				if (attr<32 || (m_version>3 && attr<48))
+					SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)|bit);
+#if FROTZ_WATCHING
+				printf("@set_attr ");
+				printText(obj.propTable+1);
+				printf(" %d\n", attr);
+#endif
 				break;
 			}
 		case 0xC: //clear_attr
 			{
+				if (m_ins.operands[0].value==0)
+					break;
 				ZObject obj=getObject(m_ins.operands[0].value);
 				int attr=m_ins.operands[1].value;
 				int offset=attr/8;
 				int bit=0x80>>(attr%8);
-				SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)&~bit);
+				if (attr<32 || (m_version>3 && attr<48))
+					SetMemory(obj.addr+offset, ReadMemory(obj.addr+offset)&~bit);
+#if FROTZ_WATCHING
+				printf("@clear_attr ");
+				printText(obj.propTable+1);
+				printf(" %d\n", attr);
+#endif
 				break;
 			}
 		case 0xD: //store
@@ -1434,24 +1874,40 @@ void process2OPInstruction()
 			break;
 		case 0xE: //insert_obj
 			{
+				if (m_ins.operands[0].value==0 || m_ins.operands[1].value==0)
+				{
+					break;
+				}
 				removeObject(m_ins.operands[0].value);
 				addChild(m_ins.operands[1].value, m_ins.operands[0].value);
+#if FROTZ_WATCHING
+				printf("@remove_obj ");
+				printText(getObject(m_ins.operands[0].value).propTable+1);
+				printf(" ");
+				printText(getObject(m_ins.operands[1].value).propTable+1);
+				printf("\n");
+#endif
 				break;
 			}
 		case 0xF: //loadw
 			{
-				int address=((m_ins.operands[0].value&0xFFFF)+2*(m_ins.operands[1].value&0xFFFF));
+				int address=((m_ins.operands[0].value&0xFFFF)+2*(m_ins.operands[1].value));
 				setVariable(m_ins.store, makeS16(ReadMemory(address)&0xFF, ReadMemory(address+1)&0xFF));
 				break;
 			}
 		case 0x10: //loadb
 			{
-				int address=((m_ins.operands[0].value&0xFFFF)+(m_ins.operands[1].value&0xFFFF));
+				int address=((m_ins.operands[0].value&0xFFFF)+(m_ins.operands[1].value));
 				setVariable(m_ins.store, ReadMemory(address)&0xFF);
 				break;
 			}
 		case 0x11: //get_prop
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store,0);
+					break;
+				}
 				ZObject obj=getObject(m_ins.operands[0].value);
 				ZProperty prop=getProperty(obj, m_ins.operands[1].value);
 				if (prop.size==1)
@@ -1470,6 +1926,11 @@ void process2OPInstruction()
 			}
 		case 0x12: //get_prop_addr
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store,0);
+					break;
+				}
 				ZObject obj=getObject(m_ins.operands[0].value);
 				ZProperty prop=getProperty(obj, m_ins.operands[1].value);
 				if (prop.bDefault)
@@ -1480,14 +1941,20 @@ void process2OPInstruction()
 			}
 		case 0x13: //get_next_prop
 			{
+				if (m_ins.operands[0].value==0)
+				{
+					setVariable(m_ins.store,0);
+					break;
+				}
 				ZObject obj=getObject(m_ins.operands[0].value);
+				int propMask=(m_version<=3)?31:63;
 				if (m_ins.operands[1].value==0)
 				{
 					int address=obj.propTable;
 					int textLen=ReadMemory(address++)&0xFF;
 					address+=textLen*2;
 					int nextSizeId=ReadMemory(address)&0xFF;
-					setVariable(m_ins.store, nextSizeId&31);
+					setVariable(m_ins.store, nextSizeId&propMask);
 				}
 				else
 				{
@@ -1499,7 +1966,7 @@ void process2OPInstruction()
 					else
 					{
 						int nextSizeId=ReadMemory(prop.addr+prop.size)&0xFF;
-						setVariable(m_ins.store, nextSizeId&31);
+						setVariable(m_ins.store, nextSizeId&propMask);
 					}
 				}
 				break;
@@ -1520,16 +1987,20 @@ void process2OPInstruction()
 			setVariable(m_ins.store, m_ins.operands[0].value%m_ins.operands[1].value);
 			break;
 		case 0x19: //call_2s
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 0x1A: //call_2n
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 0x1B: //set_colour
 			illegalInstruction();
 			break;
 		case 0x1C: //throw
-			illegalInstruction();
+			while (m_ins.operands[1].value<stackDepth(&m_callStack))
+			{
+				stackPop(&m_callStack);
+			}
+			returnRoutine(m_ins.operands[0].value);
 			break;
 		case 0x1D:
 		case 0x1E:
@@ -1544,11 +2015,11 @@ void processVARInstruction()
 	switch (m_ins.op)
 	{
 		case 0: // call
-			callRoutine(2*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 1: //storew
 			{
-				int address=((m_ins.operands[0].value&0xFFFF)+2*(m_ins.operands[1].value&0xFFFF));
+				int address=((m_ins.operands[0].value&0xFFFF)+2*m_ins.operands[1].value);
 				int value=m_ins.operands[2].value;
 				SetMemory(address, (byte)((value>>8)&0xFF));
 				SetMemory(address+1, (byte)(value&0xFF));
@@ -1556,13 +2027,15 @@ void processVARInstruction()
 			}
 		case 2: //storeb
 			{
-				int address=((m_ins.operands[0].value&0xFFFF)+(m_ins.operands[1].value&0xFFFF));
+				int address=((m_ins.operands[0].value&0xFFFF)+m_ins.operands[1].value);
 				int value=m_ins.operands[2].value;
 				SetMemory(address, (byte)(value&0xFF));
 				break;
 			}
 		case 3: //put_prop
 			{
+				if (m_ins.operands[0].value==0)
+					break;
 				ZObject obj=getObject(m_ins.operands[0].value);
 				ZProperty prop=getProperty(obj, m_ins.operands[1].value);
 				if (!prop.bDefault)
@@ -1585,16 +2058,20 @@ void processVARInstruction()
 			}
 		case 4: //sread
 			{
-				int bufferAddr=m_ins.operands[0].value;
-				int parseAddr=m_ins.operands[1].value;
+				int bufferAddr=(m_ins.operands[0].value&0xFFFF);
+				int parseAddr=(m_ins.operands[1].value&0xFFFF);
 				int maxLength=ReadMemory(bufferAddr++)&0xFF;
-				int maxParse=ReadMemory(parseAddr++)&0xFF;
 				int realInLen=0;
 				int inLen;
+				int stringLengthAddr=0;
 				int i;
+				if (m_ins.numOps>2) // timed input not supported
+					illegalInstruction();
 				updateStatus();
-				ScreenReadInput(m_input, sizeof(m_input));
+				fgets(m_input, sizeof(m_input), stdin);
 				inLen=strlen(m_input);
+				if (m_version>=5)
+					stringLengthAddr=bufferAddr++;
 				for (i=0; i<inLen && i<maxLength; i++)
 				{
 					if (m_input[i]!='\r' && m_input[i]!='\n')
@@ -1604,18 +2081,28 @@ void processVARInstruction()
 					}
 				}
 				m_input[realInLen]='\0';
-				SetMemory(bufferAddr++,0);
-				SetMemory(parseAddr,(byte)lexicalAnalysis(m_input, parseAddr+1, maxParse));
+				if (m_version<5)
+					SetMemory(bufferAddr++,0);
+				else
+					SetMemory(stringLengthAddr, realInLen);
+				if (m_version<5 || parseAddr!=0)
+					lexicalAnalysis(m_input, parseAddr, m_dictionaryTable, FALSE);
+				if (m_version>=5)
+					setVariable(m_ins.store, '\r');
 				break;
 			}
 		case 5: //print_char
-			ScreenPrintChar((char)m_ins.operands[0].value);
+			printToStream((char)m_ins.operands[0].value);
 			break;
 		case 6: //print_num
 			{
-				char NumString[32];
-				sprintf(NumString, "%d", m_ins.operands[0].value);
-				ScreenPrint(NumString);
+				char numString[16];
+				char *numPtr=numString;
+				sprintf(numString,"%d", m_ins.operands[0].value);
+				while (*numPtr)
+				{
+					printToStream(*(numPtr++));
+				}
 				break;
 			}
 		case 7: //random
@@ -1636,69 +2123,278 @@ void processVARInstruction()
 			setVariableIndirect(m_ins.operands[0].value, readVariable(0));
 			break;
 		case 0xA: //split_window
-			haltInstruction();
+			if (m_ins.operands[0].value==0)
+			{
+				ioUnsplitWindow();
+			}
+			else
+			{
+				ioSplitWindow(m_ins.operands[0].value);
+				if (m_version==3)
+					ioEraseWindow(1);
+			}
 			break;
 		case 0xB: //set_window
-			haltInstruction();
+			ioSetWindow(m_ins.operands[0].value, m_ins.operands[0].value==1);
 			break;
 		case 0xC: //call_vs2
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 0xD: //erase_window
-			illegalInstruction();
+			if (m_ins.operands[0].value==-1)
+			{
+				ioUnsplitWindow();
+				ioEraseWindow(0);
+			}
+			else if (m_ins.operands[0].value==-2)
+			{
+				ioEraseWindow(0);
+				ioEraseWindow(1);
+			}
+			else
+			{
+				ioEraseWindow(m_ins.operands[0].value);
+			}
 			break;
 		case 0xE: //erase_line
-			illegalInstruction();
+			if (m_ins.operands[0].value==1)
+			{
+				ioEraseToEndOfLine();
+			}
 			break;
 		case 0xF: //set_cursor
-			illegalInstruction();
+			ioSetCursor(m_ins.operands[1].value, m_ins.operands[0].value);
 			break;
 		case 0x10: //get_cursor
-			illegalInstruction();
+			{
+				int array=m_ins.operands[0].value&0xFFFF;
+				int x,y;
+				ioGetCursor(&x,&y);
+				SetMemory(array+0,(y>>8)&0xFF);
+				SetMemory(array+1,y&0xFF);
+				SetMemory(array+2,(x>>8)&0xFF);
+				SetMemory(array+3,x&0xFF);
+			}
 			break;
 		case 0x11: //set_text_style
-			illegalInstruction();
+			if (m_ins.operands[0].value==0)
+				ioClearStyleBits();
+			else
+				ioSetStyleBits(m_ins.operands[0].value);
 			break;
 		case 0x12: //buffer_mode
-			illegalInstruction();
+			// Don't care, we do word wrap differently
 			break;
 		case 0x13: //output_stream
-			haltInstruction();
+			if (abs(m_ins.operands[0].value)==3)
+			{
+				if (m_ins.operands[0].value>0 && m_ins.numOps>=2)
+				{
+					m_memStreamPtr=(m_ins.operands[0].value>0 && m_ins.numOps>=2)?m_ins.operands[1].value:0;
+					SetMemory(m_memStreamPtr+0,0);
+					SetMemory(m_memStreamPtr+1,0);
+				}
+				else
+				{
+					m_memStreamPtr=0;
+				}
+			}
+			else if (abs(m_ins.operands[0].value)==1)
+			{
+				m_outputStream=(m_ins.operands[0].value>0);
+			}
 			break;
 		case 0x14: //input_stream
-			haltInstruction();
+			if (m_ins.operands[0].value!=0)
+				haltInstruction(); // We don't support transcription
 			break;
 		case 0x15: //sound_effect
-			//haltInstruction();
+			// Don't care, we have no sound HW
 			break;
 		case 0x16: //read_char
-			illegalInstruction();
+			fgets(m_input, sizeof(m_input), stdin);
+			setVariable(m_ins.store, m_input[0]?m_input[0]:'\r');
 			break;
 		case 0x17: //scan_table
-			illegalInstruction();
-			break;
+			{
+				int x=(m_ins.operands[0].value&0xFFFF);
+				int table=(m_ins.operands[1].value&0xFFFF);
+				int len=(m_ins.operands[2].value&0xFFFF);
+				int form=(m_ins.numOps>3?m_ins.operands[3].value&0xFFFF:0x82);
+				int found=0;
+				int i;
+				for (i=0;i<len;i++)
+				{
+					if (((form&0x80)!=0 && x==makeU16(ReadMemory(table)&0xFF, ReadMemory(table+1)&0xFF)) ||
+						((form&0x80)==0 && x==(ReadMemory(table)&0xFF)))
+					{
+						found=table;
+						break;
+					}
+					table+=(form&0x7F);
+				}
+				setVariable(m_ins.store, found);
+				doBranch(found!=0, m_ins.branch);
+				break;
+			}
 		case 0x18: //not
-			illegalInstruction();
+			setVariable(m_ins.store, ~m_ins.operands[0].value);
 			break;
 		case 0x19: //call_vn
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 0x1A: //call_vn2
-			illegalInstruction();
+			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
 			break;
 		case 0x1B: //tokenise
-			illegalInstruction();
-			break;
+			{
+				// Nb. Never seen in game so consider untested
+				int bufferAddr=(m_ins.operands[0].value&0xFFFF);
+				int parseAddr=(m_ins.operands[1].value&0xFFFF);
+				int dictionaryTable=(m_ins.numOps>2 && m_ins.operands[2].value!=0)?m_ins.operands[2].value&0xFFFF:m_dictionaryTable;
+				int ignoreUnknown=(m_ins.numOps>3)?m_ins.operands[3].value:FALSE;
+				int length=ReadMemory(bufferAddr+1);
+				char *input=m_input;
+				bufferAddr+=2;
+				while (length--)
+				{
+					*input=ReadMemory(bufferAddr++);
+					if (*input=='\0')
+						break;
+					input++;
+				}
+				*input='\0';
+				lexicalAnalysis(m_input, parseAddr, dictionaryTable, ignoreUnknown);
+				break;
+			}
 		case 0x1C: //encode_text
-			illegalInstruction();
-			break;
+			{
+				// Nb. Never seen in game so consider untested
+				char token[10]={0};
+				int text=(m_ins.operands[0].value&0xFFFF)+m_ins.operands[2].value;
+				int length=m_ins.operands[1].value;
+				int codedOutput=(m_ins.operands[3].value&0xFFFF);
+				int i;
+				ZDictEntry zde;
+				for (i=0;i<9 && i<length;i++)
+				{
+					token[i]=ReadMemory(text+i);
+					if (token[i]=='\0')
+						break;
+				}
+				zde = encodeToken(token);
+				for (i=0;i<6;i++)
+					SetMemory(codedOutput+i, zde.coded[i]);
+				break;
+			}
 		case 0x1D: //copy_table
-			illegalInstruction();
-			break;
+			{
+				int first=(m_ins.operands[0].value&0xFFFF);
+				int second=(m_ins.operands[1].value&0xFFFF);
+				int size=m_ins.operands[2].value;
+				if (second==0)
+				{
+					while (size--)
+						SetMemory(first++,0);
+				}
+				else if (first>second || size<0)
+				{
+					size=abs(size);
+					while (size--)
+						SetMemory(second++, ReadMemory(first++));
+				}
+				else
+				{
+					size=abs(size);
+					first+=size;
+					second+=size;
+					while (size--)
+						SetMemory(--second, ReadMemory(--first));
+				}
+				break;
+			}
 		case 0x1E: //print_table
-			illegalInstruction();
-			break;
+			{
+				int text=(m_ins.operands[0].value&0xFFFF);
+				int height=m_ins.numOps>2?(m_ins.operands[2].value&0xFFFF):1;
+				int skip=m_ins.numOps>3?(m_ins.operands[3].value&0xFFFF):0;
+				int x,y;
+				int curX,curY;
+				ioGetCursor(&curX,&curY);
+				for (y=0; y<height; y++)
+				{
+					ioSetCursor(curX,curY++);
+					for (x=0; x<(m_ins.operands[1].value&0xFFFF); x++)
+						printToStream(ReadMemory(text++));
+					text+=skip;
+				}
+				break;
+			}
 		case 0x1F: //check_arg_count
+			{
+				char setArguments=((ZCallStack*)stackPeek(&m_callStack))->setArguments;
+				int testArguments=m_ins.operands[0].value-1;
+				int test=TRUE;
+				if (testArguments>=0)
+					test=(setArguments&(1<<testArguments));
+				doBranch(test, m_ins.branch);
+				break;
+			}
+	}
+}
+
+void processEXTInstruction()
+{
+	switch (m_ins.op)
+	{
+		case 0: // save
+			if (m_ins.numOps>0)
+			{
+				setVariable(m_ins.store,0);
+				break;
+			}
+			saveInstruction();
+			break;
+		case 1: // restore
+			if (m_ins.numOps>0)
+			{
+				setVariable(m_ins.store,0);
+				break;
+			}
+			restoreInstruction();
+			break;
+		case 2: // log_shift
+			if (m_ins.operands[1].value>=0)
+				setVariable(m_ins.store,(m_ins.operands[0].value&0xFFFF)<<(m_ins.operands[1].value));
+			else
+				setVariable(m_ins.store,(m_ins.operands[0].value&0xFFFF)>>abs(m_ins.operands[1].value));
+			break;
+		case 3: // art_shift
+			if (m_ins.operands[1].value>=0)
+				setVariable(m_ins.store,m_ins.operands[0].value<<(m_ins.operands[1].value));
+			else
+				setVariable(m_ins.store,m_ins.operands[0].value>>abs(m_ins.operands[1].value));
+			break;
+			break;
+		case 4: // set_font
+			// Don't care about fonts
+			break;
+		case 9: // save_undo
+			setVariable(m_ins.store,-1);
+			break;
+		case 0xA: // restore_undo
+			setVariable(m_ins.store,0);
+			break;
+		case 0xB: // print_unicode
+			haltInstruction();
+			break;
+		case 0xC: // check_unicode
+			haltInstruction();
+			break;
+		case 0xD: // set_true_colour
+			haltInstruction();
+			break;
+		default:
 			illegalInstruction();
 			break;
 	}
@@ -1707,9 +2403,13 @@ void processVARInstruction()
 void executeInstruction()
 {
 	m_ins.numOps=0;
-	//System.out.println(String.format("%04x", m_pc));
+	//printf("%04x\n", m_pc);
 	int opcode=readBytePC();
-	if ((opcode&0xC0)==0xC0)
+	if (m_version>=5 && opcode==0xBE)
+	{
+		readExtendedForm();
+	}
+	else if ((opcode&0xC0)==0xC0)
 	{
 		readVariableForm(opcode);
 	}
@@ -1724,13 +2424,24 @@ void executeInstruction()
 	switch (m_ins.form)
 	{
 		case Form0OP:
-			m_ins.store=readStoreInstruction(zeroOpStoreInstructions,ARRAY_SIZEOF(zeroOpStoreInstructions),m_ins.op);
-			m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),m_ins.op);
+			if (m_version<4)
+			{
+				m_ins.store=readStoreInstruction(zeroOpStoreInstructions,ARRAY_SIZEOF(zeroOpStoreInstructions),m_ins.op);
+				m_ins.branch=readBranchInstruction(zeroOpBranchInstructions,ARRAY_SIZEOF(zeroOpBranchInstructions),m_ins.op);
+			}
+			else
+			{
+				m_ins.store=readStoreInstruction(zeroOpStoreInstructionsV4,ARRAY_SIZEOF(zeroOpStoreInstructionsV4),m_ins.op);
+				m_ins.branch=readBranchInstruction(zeroOpBranchInstructionsV4,ARRAY_SIZEOF(zeroOpBranchInstructionsV4),m_ins.op);
+			}
 			//dumpCurrentInstruction();
 			process0OPInstruction();
 			break;
 		case Form1OP:
-			m_ins.store=readStoreInstruction(oneOpStoreInstructions,ARRAY_SIZEOF(oneOpStoreInstructions),m_ins.op);
+			if (m_version<5)
+				m_ins.store=readStoreInstruction(oneOpStoreInstructions,ARRAY_SIZEOF(oneOpStoreInstructions),m_ins.op);
+			else
+				m_ins.store=readStoreInstruction(oneOpStoreInstructionsV5,ARRAY_SIZEOF(oneOpStoreInstructionsV5),m_ins.op);
 			m_ins.branch=readBranchInstruction(oneOpBranchInstructions,ARRAY_SIZEOF(oneOpBranchInstructions),m_ins.op);
 			//dumpCurrentInstruction();
 			process1OPInstruction();
@@ -1742,11 +2453,40 @@ void executeInstruction()
 			process2OPInstruction();
 			break;
 		case FormVAR:
-			m_ins.store=readStoreInstruction(varOpStoreInstructions,ARRAY_SIZEOF(varOpStoreInstructions),m_ins.op);
+			if (m_version<=4)
+				m_ins.store=readStoreInstruction(varOpStoreInstructions,ARRAY_SIZEOF(varOpStoreInstructions),m_ins.op);
+			else
+				m_ins.store=readStoreInstruction(varOpStoreInstructionsV5,ARRAY_SIZEOF(varOpStoreInstructionsV5),m_ins.op);
 			m_ins.branch=readBranchInstruction(varOpBranchInstructions,ARRAY_SIZEOF(varOpBranchInstructions),m_ins.op);
 			//dumpCurrentInstruction();
 			processVARInstruction();
 			break;
+		case FormEXT:
+			m_ins.store=readStoreInstruction(extOpStoreInstructions,ARRAY_SIZEOF(extOpStoreInstructions),m_ins.op);
+			m_ins.branch=readBranchInstruction(extOpBranchInstructions,ARRAY_SIZEOF(extOpBranchInstructions),m_ins.op);
+			//dumpCurrentInstruction();
+			processEXTInstruction();
+			break;
+	}
+}
+
+void allocateDynamic()
+{
+	// Allocate memory in small chunks to help if memory is fragmented
+	// (To help when running big games on ESP32)
+	int dynamicLeft=m_endOfDynamic;
+	int numChunks=0;
+	int i;
+	memset(dynamicChunks,0,sizeof(dynamicChunks));
+	while (dynamicLeft>0)
+	{
+		int chunkSize=(dynamicLeft>DYNAMIC_CHUNK)?DYNAMIC_CHUNK:dynamicLeft;
+		dynamicChunks[numChunks++]=malloc(chunkSize);
+		dynamicLeft-=chunkSize;
+	}
+	for (i=0; i<m_endOfDynamic; i++)
+	{
+		DYNAMIC(i) = memory[i];
 	}
 }
 
@@ -1756,27 +2496,71 @@ void zopsMain(const char* GameData)
 
 	memory = GameData;
 	m_endOfDynamic = makeU16(memory[0xE] & 0xFF, memory[0xF] & 0xFF);
-	dynamic = malloc(m_endOfDynamic);
-	memcpy(dynamic, memory, m_endOfDynamic);
+	printf("%d bytes dynamic\n", m_endOfDynamic);
+	ASSERT(m_endOfDynamic <= 64 * 1024);
+	allocateDynamic();
 
-	ASSERT(ReadMemory(0) == 3);
+	m_version = ReadMemory(0);
+	ASSERT((m_version >= 3 && m_version <= 5) || m_version == 8);
+	m_memStreamPtr = 0;
+	m_outputStream = TRUE;
+	m_packedMultiplier = (m_version == 8) ? 8 : (m_version >= 4 ? 4 : 2);
 	m_globalVariables = makeU16(ReadMemory(0xC) & 0xFF, ReadMemory(0xD) & 0xFF);
 	m_abbrevTable = makeU16(ReadMemory(0x18) & 0xFF, ReadMemory(0x19) & 0xFF);
 	m_objectTable = makeU16(ReadMemory(0xA) & 0xFF, ReadMemory(0xB) & 0xFF);
 	m_dictionaryTable = makeU16(ReadMemory(0x8) & 0xFF, ReadMemory(0x9) & 0xFF);
 	m_pc = makeU16(ReadMemory(6) & 0xFF, ReadMemory(7) & 0xFF);
 	Flags = ReadMemory(1);
-	//Flags |= (1 << 4);	// status line not available
-	Flags &= ~(1 << 5); // screen splitting available
-	Flags &= ~(1 << 6); // variable pitch font
+	if (m_version == 3)
+	{
+		//Flags|=(1<<4); // status line not available
+		Flags |= (1 << 5);	// screen splitting available
+		Flags &= ~(1 << 6); // variable pitch font
+	}
+	else
+	{
+		Flags = (1 << 2);  // bold
+		Flags |= (1 << 3); // italics
+	}
 	SetMemory(1, Flags);
-	Flags = ReadMemory(0x10);
-	Flags |= (1 << 0); // transcripting
-	Flags |= (1 << 1); // fixed font
-	SetMemory(0x10, Flags);
+	Flags = makeU16(ReadMemory(0x10) & 0xFF, ReadMemory(0x11) & 0xFF);
+	Flags &= ~(1 << 0); // not transcripting
+	Flags |= (1 << 1);	// fixed font
+	if (m_version >= 5)
+	{
+		Flags &= 3; // No fancy stuff supported
+	}
+	SetMemory(0x10, Flags >> 8);
+	SetMemory(0x11, Flags & 0xFF);
+	if (m_version >= 4)
+	{
+		SetMemory(0x20, 23); // Screen height
+		SetMemory(0x21, 80); // Screen width
+	}
+	if (m_version >= 5)
+	{
+		int customAlphabet = makeU16(ReadMemory(0x34) & 0xFF, ReadMemory(0x35) & 0xFF);
+		if (customAlphabet != 0)
+		{
+			int i;
+			for (i = 0; i < sizeof(alphabetLookup[2]); i++)
+			{
+				alphabetLookup[2][i] = ReadMemory(customAlphabet + i);
+			}
+		}
+		SetMemory(0x22, 0);	 // Screen width (in units)
+		SetMemory(0x23, 80); // Screen width (in units)
+		SetMemory(0x24, 0);	 // Screen height (in units)
+		SetMemory(0x25, 23); // Screen height (in units)
+		SetMemory(0x26, 1);	 // Font width (in units)
+		SetMemory(0x27, 1);	 // Font height (in units)
+		SetMemory(0x2C, 2);	 // BG colour
+		SetMemory(0x2D, 4);	 // FG colour
+	}
 	stackInit(&m_stack, m_numberstack, sizeof(m_numberstack[0]), ARRAY_SIZEOF(m_numberstack));
 	stackInit(&m_callStack, m_callstackcontents, sizeof(m_callstackcontents[0]), ARRAY_SIZEOF(m_callstackcontents));
-	ScreenPrintChar('\n');
+	memset(stackPush(&m_callStack), 0, sizeof(ZCallStack)); // Makes save format match Frotz
+	ioReset(m_version == 3);
 	while (1)
 	{
 		executeInstruction();

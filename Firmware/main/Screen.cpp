@@ -373,13 +373,11 @@ void Screen::ConditionalScroll()
     }
     if (CursorRow == TopLine) // Shift down status line to preserve it
     {
-        int NewTopLine = TopLine + 1;
-        if (NewTopLine >= NUM_ROWS)
+        for (int Line = NonScrollingRows - 1; Line >= 0; Line--)
         {
-            NewTopLine = 0;
+            memcpy(&Row[(TopLine + 1 + Line) % NUM_ROWS], &Row[(TopLine + Line) % NUM_ROWS], sizeof(Row[0]));
         }
-        memcpy(&Row[NewTopLine], &Row[TopLine], sizeof(Row[0]));
-        TopLine = NewTopLine;
+        TopLine = (TopLine + 1) % NUM_ROWS;
     }
     memset(&Row[CursorRow], ' ', sizeof(Row[0]));
 }
@@ -407,4 +405,9 @@ void ScreenGetCursor(int* CursorX, int* CursorY)
 void ScreenSetCursor(int CursorX, int CursorY)
 {
     GScreen.SetCursorPosition(CursorX, CursorY);
+}
+
+void ScreenSetNonScrollRows(int Rows)
+{
+    GScreen.SetNonScrollingRows(Rows);
 }
