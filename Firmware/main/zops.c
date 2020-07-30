@@ -182,6 +182,16 @@ void ioClearStyleBits()
 {
 }
 
+void ioReadInput(char* input, int size)
+{
+	ScreenReadInput(input, size);
+}
+
+int ioRandom()
+{
+	return esp_random();
+}
+
 void ioReset(int bHasStatus)
 {
 	curWindow=0;
@@ -1472,11 +1482,9 @@ int restoreState(SaveStream* stream)
 
 void saveInstruction()
 {
-	char *input=m_input;
-	printf("\nSelect a file name (filename.qzl):");
-	fgets(m_input, sizeof(m_input), stdin);
-	while (*input && *input!='\n' && *input!='\r') input++;
-	*input='\0';
+	ScreenPrint("Select a file name (filename.qzl):");
+	strcpy(m_input, "/spiflash/");
+	ScreenReadInput(m_input + sizeof("/spiflash/") - 1, sizeof(m_input) - sizeof("/spiflash/"));
 	// Prime with chunk sizes
 	saveResetStream(&m_savestream);
 	saveState(&m_savestream);
@@ -1496,11 +1504,9 @@ void saveInstruction()
 
 void restoreInstruction()
 {
-	char *input=m_input;
-	printf("\nSelect a file name (filename.qzl):");
-	fgets(m_input, sizeof(m_input), stdin);
-	while (*input && *input!='\n' && *input!='\r') input++;
-	*input='\0';
+	ScreenPrint("Select a file name (filename.qzl):");
+	strcpy(m_input, "/spiflash/");
+	ScreenReadInput(m_input + sizeof("/spiflash/") - 1, sizeof(m_input) - sizeof("/spiflash/"));
 	saveResetStream(&m_savestream);
 	m_savestream.f = fopen(m_input, "rb");
 	if (m_savestream.f)
@@ -2068,7 +2074,7 @@ void processVARInstruction()
 				if (m_ins.numOps>2) // timed input not supported
 					illegalInstruction();
 				updateStatus();
-				fgets(m_input, sizeof(m_input), stdin);
+				ioReadInput(m_input, sizeof(m_input));
 				inLen=strlen(m_input);
 				if (m_version>=5)
 					stringLengthAddr=bufferAddr++;
@@ -2111,7 +2117,7 @@ void processVARInstruction()
 				int ret=0;
 				if (maxValue>0)
 				{
-					ret=(esp_random()%maxValue)+1;
+					ret=(ioRandom()%maxValue)+1;
 				}
 				setVariable(m_ins.store, ret);
 				break;
@@ -2212,7 +2218,7 @@ void processVARInstruction()
 			// Don't care, we have no sound HW
 			break;
 		case 0x16: //read_char
-			fgets(m_input, sizeof(m_input), stdin);
+			ioReadInput(m_input, sizeof(m_input));
 			setVariable(m_ins.store, m_input[0]?m_input[0]:'\r');
 			break;
 		case 0x17: //scan_table
