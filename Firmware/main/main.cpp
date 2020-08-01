@@ -387,7 +387,7 @@ void GameTask(void *pvParameters)
 			}
 			CurrentGame = SelectionScreen.Show(&GScreen);
 		}
-		if (esp_partition_mmap(GamesPartition, CurrentGame * GameSize, GameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
+		if (esp_partition_mmap(GamesPartition, CurrentGame * GameSize, CurrentGame >= 3 ? 2 * GameSize : GameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
 		{
     		ESP_LOGI(TAG, "Playing game from partition");
 		}

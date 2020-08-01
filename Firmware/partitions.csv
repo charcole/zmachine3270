@@ -3,9 +3,9 @@
 nvs,      data, nvs,     ,        0x4000,
 otadata,  data, ota,     ,        0x2000,
 phy_init, data, phy,     ,        0x1000,
-factory,  app,  factory, ,        1M,
-ota_0,    app,  ota_0,   ,        1M,
-ota_1,    app,  ota_1,   ,        1M,
+factory,  app,  factory, ,        896K,
+ota_0,    app,  ota_0,   ,        896K,
+ota_1,    app,  ota_1,   ,        896K,
 storage,  data, fat,     ,        528K, 
-games,    data, 0x40,    ,        384K,
+games,    data, 0x40,    ,        640K,
 
