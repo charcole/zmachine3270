@@ -97,6 +97,7 @@ void ioSetCursor(int x, int y)
 void ioGetCursor(int* x, int* y)
 {
 	ScreenGetCursor(x,y);
+	*y-=windowStart[curWindow];
 }
 
 void ioSplitWindow(int numLines)
@@ -167,7 +168,7 @@ void ioEraseToEndOfLine()
 {
 	int i;
 	ioGetCursor(&cursorX[curWindow],&cursorY[curWindow]);
-	for (i=cursorX[curWindow]; i<80; i++)
+	for (i=cursorX[curWindow]; i<NUM_COLS; i++)
 	{
 		ScreenPrintChar(' ');
 	}
@@ -1138,7 +1139,7 @@ void updateStatus()
 		ASSERT(m_memStreamPtr==0);
 		printText(room.propTable+1);
 		ioGetCursor(&statusX,&statusY);
-		while (statusX<69)
+		while (statusX<68)
 		{
 			ioPrintChar(' ');
 			statusX++;
