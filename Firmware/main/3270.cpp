@@ -59,4 +59,14 @@ void BuildTextTables()
 	Map('\'', 0x7D);
 	Map('=', 0x7E);
 	Map('"', 0x7F);
+	
+	Map('`', 0x79);
+	Map(0xB1, 0xBF);
+	Map('~', 0xA1);
+	Map('^', 0xB0);
+	Map('[', 0xC0);// Should be 0xBA. Replaced by {
+	Map(']', 0xD0);// Should be 0xBB. Replaced by }
+	Map('{', 0xC0);
+	Map('}', 0xD0);
+	Map('\\', 0xE0);
 }
