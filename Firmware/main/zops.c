@@ -2170,13 +2170,15 @@ void processVARInstruction()
 			}
 			break;
 		case 0xF: //set_cursor
-			ioSetCursor(m_ins.operands[1].value, m_ins.operands[0].value);
+			ioSetCursor(m_ins.operands[1].value-1, m_ins.operands[0].value-1);
 			break;
 		case 0x10: //get_cursor
 			{
 				int array=m_ins.operands[0].value&0xFFFF;
 				int x,y;
 				ioGetCursor(&x,&y);
+				x++; // not zero based index in Z-machine
+				y++;
 				SetMemory(array+0,(y>>8)&0xFF);
 				SetMemory(array+1,y&0xFF);
 				SetMemory(array+2,(x>>8)&0xFF);
