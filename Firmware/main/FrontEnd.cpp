@@ -22,9 +22,9 @@ const char* SelectionScreen[24] =
 "##########       ########       ###             ########       ##########\n",
 "\n",
 "                Infocom Games                Internet\n",
-"                 (P)lanetfall                 (T)N3270 Client]\n",
-"                 (L)urking Horror             (S)SH Client]\n",
-"                 (H)itchhiker's Guide         (W)ikipedia]\n",
+"                 (1)Planetfall                (T)N3270 Client\n",
+"                 (2)Trinity                   (S)SH Client\n",
+"                 (3)Sherlock:TRotCJ           (W)ikipedia\n",
 "                              Enter Choice:"
 };
 
@@ -43,18 +43,11 @@ int FrontEnd::Show(Screen* CurrentScreen)
 
         switch (Selection[0])
         {
-            case 'P':
-            case 'p':
-                return 0;
-            case 'L':
-            case 'l':
-                return 2;
-            case 'H':
-            case 'h':
-                return 1;
-            case 'R':
-            case 'r':
-                return 3;
+            case '1':
+            case '2':
+            case '3':
+            case '4': // secret game
+                return Selection[0] - '1';
             case 'T':
             case 't':
                 return -1;

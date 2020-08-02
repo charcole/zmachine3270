@@ -7,5 +7,5 @@ factory,  app,  factory, ,        896K,
 ota_0,    app,  ota_0,   ,        896K,
 ota_1,    app,  ota_1,   ,        896K,
 storage,  data, fat,     ,        528K, 
-games,    data, 0x40,    ,        640K,
+games,    data, 0x40,    ,        768K,
 

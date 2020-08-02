@@ -368,7 +368,7 @@ void GameTask(void *pvParameters)
 	spi_flash_mmap_handle_t FlashHandle = 0;
 	if (GamesPartition)
 	{
-		constexpr int GameSize = 128 * 1024;
+		constexpr int GameSize = 256 * 1024;
 		FrontEnd SelectionScreen;
 		int CurrentGame = SelectionScreen.Show(&GScreen);
 		while (CurrentGame < 0)
@@ -387,7 +387,15 @@ void GameTask(void *pvParameters)
 			}
 			CurrentGame = SelectionScreen.Show(&GScreen);
 		}
-		if (esp_partition_mmap(GamesPartition, CurrentGame * GameSize, CurrentGame >= 3 ? 2 * GameSize : GameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
+		int CurGameOffset = CurrentGame * GameSize;
+		int CurGameSize = GameSize;
+		if (CurrentGame == 0 || CurrentGame == 3) // Z3 games
+		{
+			CurGameSize /= 2;
+			if (CurrentGame == 3)
+				CurGameOffset = CurGameSize;
+		}
+		if (esp_partition_mmap(GamesPartition, CurGameOffset, CurGameSize, SPI_FLASH_MMAP_DATA, &GameData, &FlashHandle) == ESP_OK)
 		{
     		ESP_LOGI(TAG, "Playing game from partition");
 		}
