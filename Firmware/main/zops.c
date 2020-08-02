@@ -183,9 +183,12 @@ void ioClearStyleBits()
 {
 }
 
-void ioReadInput(char* input, int size)
+void ioReadInput(char* input, int size, int single)
 {
-	ScreenReadInput(input, size);
+	if (single)
+		ScreenReadInputSingle(input, size);
+	else
+		ScreenReadInput(input, size);
 }
 
 int ioRandom()
@@ -2075,7 +2078,7 @@ void processVARInstruction()
 				if (m_ins.numOps>2) // timed input not supported
 					illegalInstruction();
 				updateStatus();
-				ioReadInput(m_input, sizeof(m_input));
+				ioReadInput(m_input, sizeof(m_input), FALSE);
 				inLen=strlen(m_input);
 				if (m_version>=5)
 					stringLengthAddr=bufferAddr++;
@@ -2221,9 +2224,14 @@ void processVARInstruction()
 			// Don't care, we have no sound HW
 			break;
 		case 0x16: //read_char
-			ioReadInput(m_input, sizeof(m_input));
-			setVariable(m_ins.store, m_input[0]?m_input[0]:'\r');
-			break;
+			{
+				int oldWindow = ioSetWindow(2, FALSE);
+				ioSetCursor(NUM_COLS-3, NUM_ROWS-1); // Will clear line so put cursor at bottom right
+				ioReadInput(m_input, sizeof(m_input), TRUE);
+				ioSetWindow(oldWindow, FALSE);
+				setVariable(m_ins.store, m_input[0]?m_input[0]:'\r');
+				break;
+			}
 		case 0x17: //scan_table
 			{
 				int x=(m_ins.operands[0].value&0xFFFF);

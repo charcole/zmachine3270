@@ -89,6 +89,7 @@ extern "C"
 void ScreenPrint(const char* String);
 void ScreenPrintChar(char Char);
 void ScreenReadInput(char* Input, int MaxLength);
+void ScreenReadInputSingle(char* Input, int MaxLength);
 void ScreenGetCursor(int* CursorX, int* CursorY);
 void ScreenSetCursor(int CursorX, int CursorY);
 void ScreenSetNonScrollRows(int Rows);

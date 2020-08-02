@@ -397,6 +397,11 @@ void ScreenReadInput(char* Input, int MaxLength)
     GScreen.ReadInput(Input, MaxLength);
 }
 
+void ScreenReadInputSingle(char* Input, int MaxLength)
+{
+    GScreen.ReadInput(Input, MaxLength, false, -1, true, false);
+}
+
 void ScreenGetCursor(int* CursorX, int* CursorY)
 {
     GScreen.GetCursorPosition(*CursorX, *CursorY);
