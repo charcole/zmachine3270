@@ -110,6 +110,7 @@ void Screen::Print(char Char)
 
 int Screen::ReadInput(char* Input, int MaxLength, bool bWantRawInput, int Timeout, bool bPassword, bool bEcho)
 {
+    ScrollsWithoutInput = 0;
     if (!bSuspended && !bCancelInput)
     {
         WaitingInput = Input;
@@ -378,6 +379,14 @@ void Screen::ConditionalScroll()
             memcpy(&Row[(TopLine + 1 + Line) % NUM_ROWS], &Row[(TopLine + Line) % NUM_ROWS], sizeof(Row[0]));
         }
         TopLine = (TopLine + 1) % NUM_ROWS;
+        ScrollsWithoutInput++;
+    }
+    if (ScrollsWithoutInput > NUM_ROWS - NonScrollingRows)
+    {
+        char Input[128];
+        Print("[MORE]");
+        ReadInput(Input, sizeof(Input), false, -1, true, false);
+        CursorCol = 0;
     }
     memset(&Row[CursorRow], ' ', sizeof(Row[0]));
 }

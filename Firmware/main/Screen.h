@@ -70,6 +70,7 @@ private:
     int CursorCol = 0;
     int LastInputLength = 0;
     int NonScrollingRows = 1;
+    int ScrollsWithoutInput = 0;
     bool bWordwrap = false;
     bool bRawInputWanted = false;
     bool bPasswordInput = false;
