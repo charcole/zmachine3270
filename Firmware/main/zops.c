@@ -191,7 +191,7 @@ void ioReadInput(char* input, int size, int single)
 		ScreenReadInput(input, size);
 }
 
-int ioRandom()
+unsigned int ioRandom()
 {
 	return esp_random();
 }
@@ -1701,7 +1701,7 @@ void process1OPInstruction()
 				break;
 			}	
 		case 7: //print_addr
-			printText(m_ins.operands[0].value);
+			printText(m_ins.operands[0].value&0xFFFF);
 			break;
 		case 8: //call_1s
 			callRoutine(m_packedMultiplier*(m_ins.operands[0].value&0xFFFF), m_ins.store, TRUE);
