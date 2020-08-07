@@ -32,7 +32,7 @@ void BuildTextTables()
 	Map('0', '9', 0xF0);
 	Map('\n', 0x15);
 	Map(' ', 0x40);
-	Map(0xA2, 0x4A);
+	Map('$', 0x4A); // Wikipedia says it should be cent but is $
 	Map('.', 0x4B);
 	Map('<', 0x4C);
 	Map('(', 0x4D);
@@ -40,7 +40,7 @@ void BuildTextTables()
 	Map('|', 0x4F);
 	Map('&', 0x50);
 	Map('!', 0x5A);
-	Map('$', 0x5B);
+	Map(0xA2, 0x5B); // Wikipedia says it should be $ but is pound (or filled square in US set)
 	Map('*', 0x5C);
 	Map(')', 0x5D);
 	Map(';', 0x5E);
@@ -53,20 +53,22 @@ void BuildTextTables()
 	Map('_', 0x6D);
 	Map('>', 0x6E);
 	Map('?', 0x6F);
+	Map('`', 0x79);
 	Map(':', 0x7A);
 	Map('#', 0x7B);
 	Map('@', 0x7C);
 	Map('\'', 0x7D);
 	Map('=', 0x7E);
 	Map('"', 0x7F);
-	
-	Map('`', 0x79);
-	Map(0xB1, 0xBF);
+	Map(0xB1, 0x8F); // Doesn't seem to be in character set
 	Map('~', 0xA1);
-	Map('^', 0xB0);
-	Map('[', 0xC0);// Should be 0xBA. Replaced by {
-	Map(']', 0xD0);// Should be 0xBB. Replaced by }
+	Map('^', 0xB0); // Doesn't seem to be in character set
+	Map('[', 0xBA); // Doesn't seem to be in character set
+	Map(']', 0xBB); // Doesn't seem to be in character set
 	Map('{', 0xC0);
 	Map('}', 0xD0);
 	Map('\\', 0xE0);
+	
+	Map('[', 0x8E); // Shouldn't be in character set but is [ (instead of at 0xBA)]
+	Map(']', 0x8F); // Wikipedia says should be plus minus character but is ] (instead of at 0xBB)
 }
