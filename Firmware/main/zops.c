@@ -1,3 +1,7 @@
+// Note: This is a very old C port of a Java program (that I wrote for playing Zork on Livescribe pens)
+//       Therefore does wierd things especially the &0xFFFF stuff as Java didn't have unsigned ints
+//       Probably not good starting point for other projects but it does mostly support V3-V5 + V8 and Quetzal saves
+
 #include <esp_system.h>
 
 #include <stdio.h>
