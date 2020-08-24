@@ -384,8 +384,11 @@ void Screen::ConditionalScroll()
     if (ScrollsWithoutInput > NUM_ROWS - NonScrollingRows)
     {
         char Input[128];
+        bool bOldWordwrap = bWordwrap;
+        bWordwrap = false;
         Print("[MORE]");
         ReadInput(Input, sizeof(Input), false, -1, true, false);
+        bWordwrap = bOldWordwrap;
         CursorCol = 0;
     }
     memset(&Row[CursorRow], ' ', sizeof(Row[0]));
