@@ -1,0 +1,2174 @@
+diff --git a/scripts/target/mame/mess.lua b/scripts/target/mame/mess.lua
+index 7fcdebd35b..1f54a1fd62 100644
+--- a/scripts/target/mame/mess.lua
++++ b/scripts/target/mame/mess.lua
+@@ -1124,6 +1124,7 @@ function linkProjects_mame_mess(_target, _subtarget)
+ 		"hp",
+ 		"ibm6580",
+ 		"ie15",
++		"informer",
+ 		"imp",
+ 		"intel",
+ 		"interpro",
+@@ -2391,6 +2392,11 @@ files {
+ 	MAME_DIR .. "src/mame/drivers/ie15.cpp",
+ }
+ 
++createMESSProjects(_target, _subtarget, "informer")
++files {
++	MAME_DIR .. "src/mame/drivers/informer207.cpp",
++}
++
+ createMESSProjects(_target, _subtarget, "intel")
+ files {
+ 	MAME_DIR .. "src/mame/drivers/basic52.cpp",
+diff --git a/src/devices/machine/6850acia.cpp b/src/devices/machine/6850acia.cpp
+index b7a7de81e4..16ef107d06 100644
+--- a/src/devices/machine/6850acia.cpp
++++ b/src/devices/machine/6850acia.cpp
+@@ -16,8 +16,10 @@
+     MACROS
+ ***************************************************************************/
+ 
++// CC: Uncommented for logging
+ //#define VERBOSE 1
+ //#define LOG_OUTPUT_STREAM std::cout
++// ~CC
+ #include "logmacro.h"
+ 
+ /***************************************************************************
+@@ -218,6 +220,8 @@ void acia6850_device::control_w(uint8_t data)
+ 			m_status |= SR_DCD;
+ 		}
+ 	}
++	
++	LOG("MC6850 '%s' Divide:%d Bits:%d Parity:%d Stopbits:%d Break:%d IRQ:%d\n", tag(), m_divide, m_bits, m_parity, m_stopbits, m_brk, m_tx_irq_enable);
+ 
+ 	output_rts(rts);
+ 
+@@ -293,6 +297,22 @@ void acia6850_device::write(offs_t offset, uint8_t data)
+ 
+ uint8_t acia6850_device::read(offs_t offset)
+ {
++	if (BIT(offset, 0))
++	{
++		LOG("MC6850 '%s' Data Read:%02x (%c)\n", tag(), data_r(), data_r());
++	}
++	else
++	{
++		bool RDRF = ((status_r()&SR_RDRF) != 0);
++		bool TDRE = ((status_r()&SR_TDRE) != 0);
++		bool DCD = ((status_r()&SR_DCD) != 0); 
++		bool CTS = ((status_r()&SR_CTS) != 0);
++		bool FE = ((status_r()&SR_FE) != 0);
++		bool OVRN = ((status_r()&SR_OVRN) != 0);
++		bool PE = ((status_r()&SR_PE) != 0);
++		bool IRQ = ((status_r()&SR_IRQ) != 0);
++		LOG("MC6850 '%s' Status:%02x RDRF:%d TDRE:%d DCD:%d CTS:%d FE:%d OVRN:%d PE:%d IRQ:%d\n", tag(), status_r(), RDRF, TDRE, DCD, CTS, FE, OVRN, PE, IRQ);
++	}
+ 	return BIT(offset, 0) ? data_r() : status_r();
+ }
+ 
+diff --git a/src/devices/machine/z80scc.cpp b/src/devices/machine/z80scc.cpp
+index 9dfe0e462f..aac810033a 100644
+--- a/src/devices/machine/z80scc.cpp
++++ b/src/devices/machine/z80scc.cpp
+@@ -110,8 +110,10 @@ baud rate:
+ #define LOG_DCD     (1U <<  8)
+ #define LOG_SYNC    (1U <<  9)
+ 
++// CC: Uncommented this to do logging
+ //#define VERBOSE (LOG_GENERAL|LOG_SETUP|LOG_READ|LOG_INT|LOG_CMD|LOG_TX|LOG_RCV|LOG_CTS|LOG_DCD|LOG_SYNC)
+ //#define LOG_OUTPUT_STREAM std::cout
++// ~CC
+ 
+ #include "logmacro.h"
+ 
+@@ -1279,6 +1281,19 @@ void z80scc_channel::tra_complete()
+ 			m_tx_fifo_rp_step();
+ 			m_rr0 |= RR0_TX_BUFFER_EMPTY; // Now here is room in the tx fifo again
+ 		}
++		else if (!(m_rr0 & RR0_TX_UNDERRUN))
++		{
++			LOGTX("%s %s %c done sending, now sending CRC\n", FUNCNAME, owner()->tag(), 'A' + m_index);
++			#if 0
++			m_tx_data_fifo[m_tx_fifo_wp++] = 0xC2;
++			if (m_tx_fifo_wp >= m_tx_fifo_sz)
++			{
++				m_tx_fifo_wp = 0;
++			}
++			#endif
++			transmit_register_setup(0xC1); // CRC
++			m_rr0 |= RR0_TX_UNDERRUN;
++		}
+ 		else
+ 		{
+ 			LOGTX("%s %s %c done sending, setting all sent bit\n", FUNCNAME, owner()->tag(), 'A' + m_index);
+@@ -1771,7 +1786,7 @@ uint8_t z80scc_channel::control_read()
+ 	int reg = m_uart->m_wr0_ptrbits;
+ 	int regmask = (WR0_REGISTER_MASK | (m_uart->m_wr0_ptrbits & WR0_POINT_HIGH));
+ 
+-	LOGR("%s(%02x) reg %02x, regmask %02x, WR0 %02x\n", FUNCNAME, data, reg, regmask, m_wr0);
++	LOGR("%s(%02x) \"%s\" reg %02x, regmask %02x, WR0 %02x\n", FUNCNAME, data, owner()->tag(), reg, regmask, m_wr0);
+ 	m_uart->m_wr0_ptrbits = 0;
+ 	reg &= regmask;
+ 
+@@ -1866,9 +1881,17 @@ void z80scc_channel::do_sccreg_wr0(uint8_t data)
+ 		  Receive FIFO, the data is lost */
+ 		LOGCMD("%s: %c : WR0_ERROR_RESET - not implemented\n", owner()->tag(), 'A' + m_index);
+ 		m_rx_fifo_rp_step(); // Reset error state in fifo and unlock it. unlock == step to next slot in fifo.
++		if (m_index == 0)
++			m_rr3 &= ~RR3_CHANA_EXT_IP;
++		else
++			m_rr3 &= ~RR3_CHANB_EXT_IP;
+ 		break;
+ 	case WR0_SEND_ABORT: // Flush transmitter and Send 8-13 bits of '1's, used with SDLC
+ 		LOGCMD("%s: %c : WR0_SEND_ABORT - not implemented\n", owner()->tag(), 'A' + m_index);
++		m_tx_fifo_rp = m_tx_fifo_wp;
++		transmit_register_reset();
++		m_rr0 |= RR0_TX_UNDERRUN | RR0_TX_BUFFER_EMPTY;
++		m_rr1 |= RR1_ALL_SENT;
+ 		break;
+ 	case WR0_NULL: // Do nothing
+ 		LOGCMD("%s: %c : WR0_NULL\n", owner()->tag(), 'A' + m_index);
+@@ -1908,7 +1931,8 @@ void z80scc_channel::do_sccreg_wr0(uint8_t data)
+ 		LOGCMD(" CRC_RESET_TX - not implemented\n");
+ 		break;
+ 	case WR0_CRC_RESET_TX_UNDERRUN: /* Resets Tx underrun/EOM bit (D6 of the RRO register) */
+-		LOGCMD(" CRC_RESET_TX_UNDERRUN - not implemented\n");
++		LOGCMD(" CRC_RESET_TX_UNDERRUN\n");
++		m_rr0 &= ~RR0_TX_UNDERRUN;
+ 		break;
+ 	default: /* Will not happen unless someone messes with the mask */
+ 		logerror(" Wrong CRC reset/init command:%02x\n", data & WR0_CRC_RESET_CODE_MASK);
+@@ -2483,10 +2507,17 @@ uint8_t z80scc_channel::data_read()
+ /* Step read pointer */
+ void z80scc_channel::m_rx_fifo_rp_step()
+ {
+-		m_rx_fifo_rp++;
+-		if (m_rx_fifo_rp >= m_rx_fifo_sz)
++		if (m_rx_fifo_rp == m_rx_fifo_wp)
++		{
++			printf("Not stepping FIFO\n");
++		}
++		else
+ 		{
++			m_rx_fifo_rp++;
++			if (m_rx_fifo_rp >= m_rx_fifo_sz)
++			{
+ 				m_rx_fifo_rp = 0;
++			}
+ 		}
+ 
+ 		// check if RX FIFO is empty
+@@ -2569,6 +2600,8 @@ void z80scc_channel::data_write(uint8_t data)
+ 		}
+ 	}
+ 
++	m_rr0 &= ~RR0_TX_UNDERRUN;
++
+ 	check_waitrequest();
+ 
+ 	/* Transmitter enabled?  */
+@@ -2578,15 +2611,18 @@ void z80scc_channel::data_write(uint8_t data)
+ 		if (is_transmit_register_empty()) // Is the shift register loaded?
+ 		{
+ 			LOGTX("- Setting up transmitter\n");
+-			transmit_register_setup(m_tx_data_fifo[m_tx_fifo_rp]); // Load the shift register, reload is done in tra_complete()
+-			m_tx_fifo_rp_step();
+-			LOGTX("- TX shift register loaded, clearing ALL_SENT bit\n");
++			//transmit_register_setup(m_tx_data_fifo[m_tx_fifo_rp]); // Load the shift register, reload is done in tra_complete()
++			//m_tx_fifo_rp_step();
++			//LOGTX("- TX shift register loaded, clearing ALL_SENT bit\n");
++			transmit_register_setup(0x7E); // Send flags first
+ 			m_rr1 &= ~RR1_ALL_SENT; // All is definitely not sent anymore
+-			m_rr0 |= RR0_TX_BUFFER_EMPTY; // And there is a slot in the FIFO available
++			m_tx_int_disarm = 0;
++			//m_rr0 |= RR0_TX_BUFFER_EMPTY; // And there is a slot in the FIFO available
+ 		}
+ 		else
+ 		{
+ 			LOGTX("- Transmitter not empty\n");
++			m_tx_int_disarm = 0;
+ 		}
+ 	}
+ 	else
+@@ -2648,6 +2684,16 @@ void z80scc_channel::receive_data(uint8_t data)
+ 	}
+ 
+ 	m_rr0 |= RR0_RX_CHAR_AVAILABLE;
++	
++	if (data == 0x7E)
++	{
++		LOGRCV("\"%s\": %c : Received Data Byte '%c'/%02x but triggering SDLC interrupt. HACK!\n", owner()->tag(), 'A' + m_index, isprint(data) ? data : ' ', data);
++		m_rr1 |= RR1_END_OF_FRAME;
++		m_uart->trigger_interrupt(m_index, INT_SPECIAL);
++		return;
++	}
++		
++	m_rr1 &= ~RR1_END_OF_FRAME;
+ 
+ 	// receive interrupt on FIRST and ALL character
+ 	switch (m_wr1 & WR1_RX_INT_MODE_MASK)
+@@ -2955,8 +3001,12 @@ void z80scc_channel::update_serial()
+ 	else
+ 	{
+ 		LOG("- BRG disabled\n");
+-		set_rcv_rate(0);
+-		set_tra_rate(0);
++		if (m_brg_rate != 0)
++		{
++			set_rcv_rate(0);
++			set_tra_rate(0);
++			m_brg_rate = 0;
++		}
+ 	}
+ 	// TODO: Check registers for use of RTxC and TRxC, if used as direct Tx and/or Rx clocks set them to value as programmed
+ 	// in m_uart->txca/txcb and rxca/rxcb respectivelly
+diff --git a/src/mame/drivers/informer207.cpp b/src/mame/drivers/informer207.cpp
+new file mode 100644
+index 0000000000..5effe10502
+--- /dev/null
++++ b/src/mame/drivers/informer207.cpp
+@@ -0,0 +1,1915 @@
++#include "emu.h"
++#include "screen.h"
++#include "cpu/m6809/m6809.h"
++#include "video/mc6845.h"
++#include "machine/clock.h"
++#include "machine/z80scc.h"
++#include "machine/6850acia.h"
++#include "machine/ram.h"
++#include "machine/nvram.h"
++#include "bus/rs232/rs232.h"
++#include <stdio.h>
++
++// TODO
++//  SDLC -> 0E interrupt
++//  Transmit finished interrupt (Due to keystroke causing interrupt)
++
++// J3 -> Pair (optionally 4) Serial 68B50
++// 0x8800-0x8807 (Disassembly: M8802-M8805)
++//  0x8802 - RW (!RS?)
++//   W -> {0xBF, 0x40} (Control register? -> Clock/1 + 8bits1stop)
++//   W -> {0x43, 0xD2} (Control register? !RTS,Reset -> Clock/64 + 8bits1stop + !RTS + Interrupt)
++//   R -> With 0x8803 (Status register? Checking RDRF / TDRE)
++//  0x8803 - RW (RS?)
++//   Looks like serial RW
++//  0x8804 - RW (!RS?)
++//   W -> (0x03, 0x11} (Reset + Clock/16 + 8bits1stop) , 
++//   R -> Checking &2 &8 (TDRE + CTS)
++//  0x8805 - W (RS?)
++//   W -> From buffer (0x00B6)
++
++// 0x9400-0x9407 (Disassembly: M9400-M9403) (Z8530)
++//  0x9400 - RW
++//   W -> From buffer (0xAA74 -> 0XAA7C) { 0x09, 0x48, 0x02, 0x00, 0x05, 0x68, 0x09, 0x08 }
++//   W -> { 0x10 / 0x30 }, {0x05, ??}
++//   R -> (After write 0x02) Jumping offset from 0
++//  0x9401 - R
++//   R -> Doesn't use result but write 0x38 to 0x9402
++//  0x9402 - RW
++//   W -> { 0x05, ?? }, { 0x28 }, { 0x38 }, { 0x38 }, { 0x03, 0xFD }, { 0x10 }, { 0x06, ?? }
++//   W -> { 0x28, 0x1D, 0x61, 0x03, 0xFD }
++//   W -> { 0x80, (0x1B->0x9403), 0x03, 0xDC, 0xC0 }
++//   W -> { 0x03, 0xFC, 0x05, 0x6B, (Read &0x20) }
++//   W -> { 0x01, Read (cmp 0x87), Read 0x9403, 0x30, 0x03, 0xFD }
++//   W -> { 0x0A, 0xA0, 0x06, (0x001B), 0x03, 0xFD, 0x10, Read }
++//   W -> IRQ { 0x03, Read & test zero)
++//   R -> &0x20
++//  0x9403 - RW
++//   W -> { 0xFF }, { 0xFF }, { Read 0x0B43 }, { Read 0x002F }, { Read ?? | 0x10 }, { Read 0x0024}, { Read 0x001B }
++//   R -> { Store 0x002B }, { Store 0x001E }, { Throw away }, { Store 0x001C }
++
++
++// Speculation:
++//  0x8802, 0x8803 <- Keyboard?
++//  0x8804, 0x8805 -> Printer?
++
++static u8 SerialData[]=
++{
++//	0x60,	// AID
++//	0x00,	// Cursor
++//	0x00,
++	0xE5,	// Write
++	0xD3,				//WCC [reset device + restore (unlock) keyboard + reset MDT]
++	0x11, 0x5C, 0xF0,	//     SBA Row 24 Column 1
++	0x1D, 0xF0,			//SF/Attribute
++	//[protected, alphanumeric, display normal intensity, not pen-detectable, MDT off]
++	0x6E, 0x40,			//'> '
++	0x1D, 0x40,         //SF/Attribute
++	//[unprotected, alphanumeric, display normal intensity, not pen-detectable, MDT off]
++	//SBA is not required here since this is being written at the current buffer position 
++	0x13,				//IC - cursor displays at current position: Row 24, column 5
++	0x11, 0x5D, 0x7F,	//SBA Row 24 Column 80
++	0x1D, 0xF0			//SF/Attribute
++		//[protected, alphanumeric, display normal intensity, not pen-detectable, MDT off]*/
++};
++
++class informer_serial_device
++	: public device_t
++	, public device_buffered_serial_interface<16U>
++	, public device_rs232_port_interface
++{
++public:
++	informer_serial_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
++
++	virtual ioport_constructor device_input_ports() const override;
++
++	virtual DECLARE_WRITE_LINE_MEMBER( input_txd ) override;
++
++	DECLARE_WRITE_LINE_MEMBER(update_serial);
++	
++	virtual void send_byte(uint8_t byte);
++
++protected:
++	virtual void device_start() override {}
++	virtual void device_reset() override;
++	virtual void tra_callback() override;
++	virtual void received_byte(uint8_t byte) override;
++
++	required_ioport m_rs232_txbaud;
++	required_ioport m_rs232_rxbaud;
++	required_ioport m_rs232_startbits;
++	required_ioport m_rs232_databits;
++	required_ioport m_rs232_parity;
++	required_ioport m_rs232_stopbits;
++};
++
++DECLARE_DEVICE_TYPE(SERIAL_INFORMER, informer_serial_device)
++
++informer_serial_device::informer_serial_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
++	: device_t(mconfig, SERIAL_INFORMER, tag, owner, clock)
++	, device_buffered_serial_interface(mconfig, *this)
++	, device_rs232_port_interface(mconfig, *this)
++	, m_rs232_txbaud(*this, "RS232_TXBAUD")
++	, m_rs232_rxbaud(*this, "RS232_RXBAUD")
++	, m_rs232_startbits(*this, "RS232_STARTBITS")
++	, m_rs232_databits(*this, "RS232_DATABITS")
++	, m_rs232_parity(*this, "RS232_PARITY")
++	, m_rs232_stopbits(*this, "RS232_STOPBITS")
++{
++}
++
++INPUT_PORTS_START(serial_informer)
++	MCFG_RS232_BAUD("RS232_TXBAUD", RS232_BAUD_9600, "TX Baud", informer_serial_device, update_serial)
++	MCFG_RS232_BAUD("RS232_RXBAUD", RS232_BAUD_9600, "RX Baud", informer_serial_device, update_serial)
++	MCFG_RS232_STARTBITS("RS232_STARTBITS", RS232_STARTBITS_1, "Start Bits", informer_serial_device, update_serial)
++	MCFG_RS232_DATABITS("RS232_DATABITS", RS232_DATABITS_8, "Data Bits", informer_serial_device, update_serial)
++	MCFG_RS232_PARITY("RS232_PARITY", RS232_PARITY_NONE, "Parity", informer_serial_device, update_serial)
++	MCFG_RS232_STOPBITS("RS232_STOPBITS", RS232_STOPBITS_1, "Stop Bits", informer_serial_device, update_serial)
++INPUT_PORTS_END
++
++ioport_constructor informer_serial_device::device_input_ports() const
++{
++	return INPUT_PORTS_NAME(serial_informer);
++}
++
++WRITE_LINE_MEMBER( informer_serial_device::input_txd )
++{
++	device_buffered_serial_interface::rx_w(state);
++}
++
++WRITE_LINE_MEMBER( informer_serial_device::update_serial )
++{
++	reset();
++}
++
++void informer_serial_device::device_reset()
++{
++	clear_fifo();
++
++	int const startbits = convert_startbits(m_rs232_startbits->read());
++	int const databits = convert_databits(m_rs232_databits->read());
++	parity_t const parity = convert_parity(m_rs232_parity->read());
++	stop_bits_t const stopbits = convert_stopbits(m_rs232_stopbits->read());
++
++	set_data_frame(startbits, databits, parity, stopbits);
++
++	int const txbaud = convert_baud(m_rs232_txbaud->read());
++	set_tra_rate(txbaud);
++
++	int const rxbaud = convert_baud(m_rs232_rxbaud->read());
++	set_rcv_rate(rxbaud);
++
++	output_rxd(1);
++
++	// TODO: make this configurable
++	output_dcd(1);
++	output_dsr(1);
++	output_cts(0);
++	receive_register_reset();
++	transmit_register_reset();
++}
++
++void informer_serial_device::tra_callback()
++{
++	output_rxd(transmit_register_get_data_bit());
++}
++
++void informer_serial_device::send_byte(uint8_t byte)
++{
++	//printf("Send byte: %02x (%c)\n", byte, byte);
++	transmit_byte(byte);
++}
++
++void informer_serial_device::received_byte(uint8_t byte)
++{
++	printf("Got byte: %02x\n", byte);
++}
++
++DEFINE_DEVICE_TYPE(SERIAL_INFORMER, informer_serial_device, "serial_informer", "Serial Informer")
++
++class informer_keyboard_device : public informer_serial_device
++{
++public:
++	informer_keyboard_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
++	virtual ioport_constructor device_input_ports() const override;
++	
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_data);
++
++protected:
++	virtual void received_byte(uint8_t byte) override;
++};
++
++DECLARE_DEVICE_TYPE(SERIAL_INFORMER_KEYBOARD, informer_keyboard_device)
++
++informer_keyboard_device::informer_keyboard_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
++	: informer_serial_device(mconfig, tag, owner, clock)
++{
++}
++
++INPUT_PORTS_START(informer_keyboard)
++	MCFG_RS232_BAUD("RS232_TXBAUD", RS232_BAUD_2400, "TX Baud", informer_keyboard_device, update_serial)
++	MCFG_RS232_BAUD("RS232_RXBAUD", RS232_BAUD_2400, "RX Baud", informer_keyboard_device, update_serial)
++	MCFG_RS232_STARTBITS("RS232_STARTBITS", RS232_STARTBITS_1, "Start Bits", informer_keyboard_device, update_serial)
++	MCFG_RS232_DATABITS("RS232_DATABITS", RS232_DATABITS_8, "Data Bits", informer_keyboard_device, update_serial)
++	MCFG_RS232_PARITY("RS232_PARITY", RS232_PARITY_NONE, "Parity", informer_keyboard_device, update_serial)
++	MCFG_RS232_STOPBITS("RS232_STOPBITS", RS232_STOPBITS_2, "Stop Bits", informer_keyboard_device, update_serial)
++	
++	PORT_START("senddata")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("SDA") PORT_CODE(KEYCODE_S)  PORT_CHANGED_MEMBER(DEVICE_SELF, informer_keyboard_device, trigger_data, nullptr)
++INPUT_PORTS_END
++
++ioport_constructor informer_keyboard_device::device_input_ports() const
++{
++	return INPUT_PORTS_NAME(informer_keyboard);
++}
++
++void informer_keyboard_device::received_byte(uint8_t byte)
++{
++	printf("Keyboard got byte: %02x\n", byte);
++}
++
++INPUT_CHANGED_MEMBER(informer_keyboard_device::trigger_data)
++{
++#if 0
++	static int Idx = 0x9100;
++	int ToSend=Idx >> 1;
++	if (Idx & 1)
++	{
++		ToSend>>=8;
++	}
++	Idx++;
++#else
++	static int Idx = 0;
++//	int Buffer[4]={0xA8, 0x8B, 0x48, 0x80}; // Change codes, Shift (2), Setup/TEST, Turn off shift
++//	int Buffer[4]={0xA8, 0x31, 0x00, 0x80}; // Change codes, Shift (2), Setup/TEST, Turn off shift
++	//int Buffer[8]={0xA8, 0x8B, 0x48, 0x80, 0x0A, 0x4D, 0x31}; // Change codes, Shift (2), Setup/TEST, Turn off shift
++	//int Buffer[8]={0xA8, 0x8B, 0x48, 0x80, 0x17, 0x4D, 0x31}; // Change codes, Shift (2), Setup/TEST, Turn off shift
++	int Buffer[8]={0xA8, 0x02, 0x41, 0x02, 0x41, 0x02, 0x41, 0x02};
++	int ToSend = Buffer[Idx&7];
++	if (Idx >= 7)
++	{
++		// Change code + Shift + ??
++		  // 0x08 (crashes?)
++		  // 0x28, 0x48 menu
++		  // 0x50 does something
++		  // 0x52 does something
++		// 01 - Return to top left
++		// 02 - 4
++		// 03 - Down
++		// 04 - B
++		// 05 - G
++		// 06 - R
++		// 07 - 5
++		// 0A - 1
++		// 0B - Backspace
++		// 0C - N
++		// 0D - H
++		// 0E - T
++		// 0F - 6
++		// 12 - ,
++		// 13 - Space / Right
++		// 14 - M
++		// 15 - J
++		// 16 - Y
++		// 17 - 7
++		// 18 - Cleared bottom of screen
++		// 1B - ^ character in status bar
++		// 1D - K
++		// 1E - U
++		// 1F - 8
++		// 22 - 9
++		// 23 - 8
++		// 24 - .
++		// 25 - L
++		// 26 - I
++		// 27 - 9
++		// 2A - 6
++		// 2B - 5
++		// 2C - /
++		// 2D - :
++		// 2E - O
++		// 2F - Shift char
++		// 30 - '
++		// 31 - Status bar (Cleared)
++		// 32 - 3
++		// 33 - 2
++		// 35 - '
++		// 36 - P
++		// 37 - -
++		// 38 - <
++		// 39 - Space/Right
++		// 3a - .
++		// 3b - Up arrow surrounded
++		// 3d - Enter?
++		// 3e - c (or cent)
++		// 3f - =
++		// 40 - {
++		// 41 - Status bar (clock)
++		// 44 - Z
++		// 45 - A
++		// 46 - Top left
++		// 47 - 1
++		// 4C - X
++		// 4D - S 
++		// 4E - Q
++		// 4F - 2
++		// 50 - Status bar (-f)
++		// 51 - \
++		// 52 - :
++		// 53 - *
++		// 54 - C
++		// 55 - D
++		// 56 - W
++		// 57 - 3
++		// 58 - Statu bar (man with arrows)
++		// 59 - Back space?
++		// 5A - 7
++		// 5B - Move vertically somehow
++		// 5C - V
++		// 5D - F
++		// 5E - E
++		// 5F - 4
++		// 61 - B
++		// 62 - C
++		// 63 - D
++		// 64 - E
++		// ...
++		// 79 - Z
++		// 7E - :
++
++		ToSend = (Idx - 2)&0x7F;
++		while (ToSend == 0x08 || ToSend == 0x58 || ToSend == 0x41 || ToSend==0x50)
++		{
++			Idx++;
++			ToSend = (Idx - 2)&0x7F;
++		}
++
++		ToSend = 0x02;
++	}
++	Idx++;
++#endif
++
++	uint8_t byte = (uint8_t)ToSend;
++	printf("Keyboard sending byte: %02x (%c)\n", byte, (char)byte);
++	send_byte(byte);
++}
++
++DEFINE_DEVICE_TYPE(INFORMER_KEYBOARD, informer_keyboard_device, "informer_keyboard", "Informer Keyboard")
++
++class informer_computer_device : public informer_serial_device
++{
++public:
++	informer_computer_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
++	virtual ioport_constructor device_input_ports() const override;
++
++	virtual WRITE_LINE_MEMBER( input_rts ) override;
++	
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_data);
++	
++	virtual WRITE_LINE_MEMBER( input_etc ) override; // Just to improve speed of testing
++
++protected:
++	virtual void received_byte(uint8_t byte) override;
++	
++	void SendTestData();
++
++	bool bRTS = false;
++	bool bSendData = false;
++};
++
++DECLARE_DEVICE_TYPE(SERIAL_INFORMER_COMPUTER, informer_computer_device)
++
++informer_computer_device::informer_computer_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
++	: informer_serial_device(mconfig, tag, owner, clock)
++{
++}
++
++INPUT_PORTS_START(informer_computer)
++	MCFG_RS232_BAUD("RS232_TXBAUD", RS232_BAUD_2400, "TX Baud", informer_computer_device, update_serial)
++	MCFG_RS232_BAUD("RS232_RXBAUD", RS232_BAUD_2400, "RX Baud", informer_computer_device, update_serial)
++	MCFG_RS232_STARTBITS("RS232_STARTBITS", RS232_STARTBITS_1, "Start Bits", informer_computer_device, update_serial)
++	MCFG_RS232_DATABITS("RS232_DATABITS", RS232_DATABITS_8, "Data Bits", informer_computer_device, update_serial)
++	MCFG_RS232_PARITY("RS232_PARITY", RS232_PARITY_NONE, "Parity", informer_computer_device, update_serial)
++	MCFG_RS232_STOPBITS("RS232_STOPBITS", RS232_STOPBITS_0, "Stop Bits", informer_computer_device, update_serial)
++	
++	PORT_START("senddata")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("SDA") PORT_CODE(KEYCODE_T)  PORT_CHANGED_MEMBER(DEVICE_SELF, informer_computer_device, trigger_data, nullptr)
++INPUT_PORTS_END
++
++ioport_constructor informer_computer_device::device_input_ports() const
++{
++	return INPUT_PORTS_NAME(informer_computer);
++}
++
++enum ESDLCPacketType
++{
++	InformationPacket = 0x00,
++	RecieveReady = 0x01,
++	RecieveNotReady = 0x05,
++	Reject = 0x09,
++	UnnumberedInfo = 0x03,
++	RequestInitializationMode = 0x07,
++	DisconnectMode = 0x0F,
++	RequestDisconnect = 0x43,
++	UnnumberedACK = 0x63,
++	FrameReject = 0x87,
++	XID = 0xAF,
++	Configure = 0xC7,
++	Test = 0xE3,
++	Beacon = 0xEF,
++	Unknown = 0xFF
++};
++
++enum ETransmissionHeaderType
++{
++	FMData = 0x00,
++	NetworkHeader = 0x20,
++	DataFlowControl = 0x40,
++	SessionControl = 0x60
++};
++
++enum ESenseDataReason
++{
++	UserSenseDataOnly = 0x00,
++	RequestReject = 0x08,
++	RequestError = 0x10,
++	StateError = 0x20,
++	ReqHdrUsageError = 0x40,
++	PathError = 0x80
++};
++
++enum ERequestRejectReason
++{
++	ResourceNotAvailable,
++	InterventionRequired,
++	MissingPassword,
++	InvalidPassword,
++	SessionLimitExceeded,
++	ResourceUnknown,
++	ResourceNotAvailable2,
++	InvalidContentsID,
++	ModeInconsistency,
++	PermissionRejected,
++	BracketRaceError,
++	ProcedureNotSupported,
++	NAUContention,
++	NAUNotAuthorized,
++	EndUserNotAuthorized,
++	MissingRequesterID,
++	Break,
++	UnsufficientResource,
++	BracketBidReject,
++	BracketBidReject2,
++	FunctionActive,
++	FunctionActive2,
++	LinkOrLinkResourceInactive,
++	LinkProcedureinProcess,
++	RTRNotRequired,
++	RequestSequenceError
++};
++
++struct ParsedSDLC
++{
++	ESDLCPacketType Type;
++	uint8_t Address;
++	uint8_t RecieveCount;
++	uint8_t SendCount;
++	bool bPollOrFinal;
++	bool bRecieveCountValid;
++	bool bSendCountValid;
++};
++
++struct ParsedFID2
++{
++	bool bStartOfBIU;
++	bool bEndOfBIU;
++	bool bODAI;
++	bool bExpidited;
++	uint8_t Destination;
++	uint8_t Origin;
++	uint16_t Sequence;
++};
++
++struct ParsedRU
++{
++	ETransmissionHeaderType HeaderType;
++	uint8_t ResponseType;
++	bool bHasFMHeader;
++	bool bBypassQueues;
++	bool bPAC;
++};
++
++struct ParsedRequest
++{
++	bool bStartOfChain;
++	bool bEndOfChain;
++	bool bBeginBracket;
++	bool bEndBracket;
++	bool bChangeDirection;
++	bool bEnciphered;
++	bool bPadded;
++	bool bConditionalEndBracket;
++	bool bCodeSelection;
++};
++
++struct ParsedResponce
++{
++	bool bPositiveResponse;
++};
++
++struct ParsedSenseData
++{
++	ESenseDataReason Reason;
++	uint8_t SubReason;
++	uint16_t SpecificInfo;
++};
++
++class ParsedPacket
++{
++public:
++	ParsedPacket()
++	{
++		memset(this, 0, sizeof(*this));
++		StartOfData = -1;
++	}
++	
++	void Parse(const uint8_t *PacketData, int PacketSize)
++	{
++		EndOfData = PacketSize - 1;
++		if (PacketSize > 2)
++		{
++			bSDLCValid = true;
++			SDLC.Address = PacketData[0];
++			SDLC.RecieveCount = (PacketData[1] >> 5) & 7;
++			SDLC.SendCount = (PacketData[1] >> 1) & 7;
++			SDLC.bPollOrFinal = (PacketData[1] >> 4) & 1;
++			if ((PacketData[1] & 1) == 0)
++			{
++				SDLC.Type = InformationPacket;
++				SDLC.bRecieveCountValid = SDLC.bSendCountValid = true;
++
++				if (PacketSize > 7)
++				{
++					if ((PacketData[2] & 0xF0) == 0x20)
++					{
++						bFID2Valid = true;
++						FID2.bStartOfBIU = ((PacketData[2] & 0x08) != 0);
++						FID2.bEndOfBIU = ((PacketData[2] & 0x04) != 0);
++						FID2.bODAI = ((PacketData[2] & 0x02) != 0);
++						FID2.bExpidited = ((PacketData[2] & 0x01) != 0);
++						FID2.Destination = PacketData[4];
++						FID2.Origin = PacketData[5];
++						FID2.Sequence = (((int)PacketData[6] << 8) | PacketData[7]);
++
++						if (PacketSize > 10)
++						{
++							bResponseValid = ((PacketData[8] & 0x80) != 0);						
++							bRequestValid = ((PacketData[8] & 0x80) == 0);
++							RU.HeaderType = (ETransmissionHeaderType)(PacketData[8] & 0x60);
++							RU.bHasFMHeader = ((PacketData[8] & 0x08) != 0);
++							RU.ResponseType = (PacketData[9] & 0xA0);
++							RU.bBypassQueues = ((PacketData[9]&0x02) == 0);
++							RU.bPAC = ((PacketData[9]&0x01) != 0);
++							if (bRequestValid)
++							{
++								RU.ResponseType |= (PacketData[9] & 0x10);
++								Req.bStartOfChain = ((PacketData[8] & 0x02) != 0);
++								Req.bEndOfChain = ((PacketData[8] & 0x01) != 0);
++								Req.bBeginBracket = ((PacketData[10] & 0x80) != 0);
++								Req.bEndBracket = ((PacketData[10] & 0x40) != 0);
++								Req.bChangeDirection = ((PacketData[10] & 0x20) != 0);
++								Req.bCodeSelection = ((PacketData[10] & 0x08) != 0);
++								Req.bEnciphered = ((PacketData[10] & 0x04) != 0);
++								Req.bPadded = ((PacketData[10] & 0x02) != 0);
++								Req.bConditionalEndBracket = ((PacketData[10] & 0x01) != 0);
++							}
++							else if (bResponseValid)
++							{
++								Res.bPositiveResponse = ((PacketData[9] & 0x10) == 0);
++							}
++							StartOfData = 11;
++
++							if (PacketData[8] & 0x04)
++							{
++								bSenseValid = true;
++								Sense.Reason = (ESenseDataReason)PacketData[11];
++								Sense.SubReason = PacketData[12];
++								Sense.SpecificInfo = (((int)PacketData[13] << 8) | PacketData[14]);
++								StartOfData = 15;
++							}
++						}
++					}
++				}
++			}
++			else
++			{
++				uint8_t PacketType = PacketData[1];
++				switch (PacketType & 0xF)
++				{
++					case RecieveReady:
++					case RecieveNotReady:
++					case Reject:
++						SDLC.Type = (ESDLCPacketType)(PacketType & 0xF);
++						SDLC.bRecieveCountValid = true;
++						break;
++					default:
++						switch (PacketType & 0xEF)
++						{
++							case UnnumberedInfo:
++							case RequestInitializationMode:
++							case DisconnectMode:
++							case RequestDisconnect:
++							case UnnumberedACK:
++							case FrameReject:
++							case XID:
++							case Configure:
++							case Test:
++							case Beacon:
++								SDLC.Type = (ESDLCPacketType)(PacketType & 0xEF);
++								break;
++							default:
++								SDLC.Type = Unknown;
++								break;
++						}
++						break;
++				}
++			}
++		}
++	}
++
++	void Dump(const uint8_t* Data)
++	{
++		if (bSDLCValid)
++		{
++			printf("Packet for/to %02x\n", SDLC.Address);
++			switch (SDLC.Type)
++			{
++				case InformationPacket: printf("Information"); break;
++				case RecieveReady: printf("Recieve Ready"); break;
++				case RecieveNotReady: printf("Recieve Not Ready"); break;
++				case Reject: printf("Reject"); break;
++				case UnnumberedInfo: printf("Unnumbered Info"); break;
++				case RequestInitializationMode: printf("Request Initialization Mode"); break;
++				case DisconnectMode: printf("Disconnect Mode"); break;
++				case RequestDisconnect: printf("Request Disconnect"); break;
++				case UnnumberedACK: printf("Unnumbered ACK"); break;
++				case FrameReject: printf("Frame Reject"); break;
++				case XID: printf("XID"); break;
++				case Configure: printf("Configure"); break;
++				case Test: printf("Test"); break;
++				case Beacon: printf("Beacon"); break;
++				default: printf("Unknown"); break;
++			}
++			if (SDLC.bRecieveCountValid)
++			{
++				printf(" Nr=%d", SDLC.RecieveCount);
++			}
++			if (SDLC.bSendCountValid)
++			{
++				printf(" Ns=%d", SDLC.SendCount);
++			}
++			printf(" PollOrFinal=%d\n", SDLC.bPollOrFinal);
++		}
++			
++		if (bFID2Valid)
++		{
++			printf(" FID2\n");
++			printf(" Destination: %02x\n", FID2.Destination);
++			printf(" Origin: %02x\n", FID2.Origin);
++			printf(" Sequence: %04x\n", FID2.Sequence);
++			if (FID2.bStartOfBIU)
++			{
++				printf("  Start of BIU\n");
++			}
++			if (FID2.bEndOfBIU)
++			{
++				printf("  End of BIU\n");
++			}
++			if (FID2.bODAI)
++			{
++				printf("  ODAI?\n");
++			}
++			if (FID2.bExpidited)
++			{
++				printf("  Expedited\n");
++			}
++
++			if (bRequestValid || bResponseValid)
++			{
++				printf("  %s\n", bRequestValid ? "Request" : "Response");
++				switch (RU.HeaderType)
++				{
++					case FMData: printf("   FM data\n"); break;
++					case NetworkHeader: printf("   Network header\n"); break;
++					case DataFlowControl: printf("   Data flow control\n"); break;
++					case SessionControl: printf("   Session control\n"); break;
++				}
++				if (RU.bHasFMHeader)
++				{
++					printf("   FM header follows\n");
++				}
++				printf("   Response type: %02x\n", RU.ResponseType);
++				printf("   %s TC queues\n", RU.bBypassQueues ? "Bypass" : "Enqueue in");
++				printf("   %sPAC\n", RU.bPAC ? "" : "!");
++				if (bRequestValid)
++				{
++					if (Req.bStartOfChain)
++					{
++						printf("   Start of chain\n");
++					}
++					if (Req.bEndOfChain)
++					{
++						printf("   End of chain\n");
++					}
++					if (Req.bBeginBracket)
++					{
++						printf("   Begin Bracket\n");
++					}
++					if (Req.bEndBracket)
++					{
++						printf("   End Bracket\n");
++					}
++					if (Req.bChangeDirection)
++					{
++						printf("   Change Direction\n");
++					}
++					printf("   Code Selection: %d\n", Req.bCodeSelection ? 1 : 0);
++					if (Req.bEnciphered)
++					{
++						printf("   RU is enciphered\n");
++					}
++					if (Req.bPadded)
++					{
++						printf("   RU is padded\n");
++					}
++					if (Req.bConditionalEndBracket)
++					{
++						printf("   Conditional End Bracket\n");
++					}
++				}
++				else if (bResponseValid)
++				{
++					printf("   %s response\n", Res.bPositiveResponse ? "Positive" : "Negative");
++				}
++			}
++		}
++
++		if (bSenseValid)
++		{
++			switch (Sense.Reason)
++			{
++				case UserSenseDataOnly: printf("    User Sense Data Only\n"); break;
++				case RequestReject:
++					printf("    Request Reject\n");
++					switch(Sense.SubReason)
++					{
++						case ResourceNotAvailable: printf("     Resource Not Available\n"); break;
++						case InterventionRequired: printf("     Intervention Required\n"); break;
++						case MissingPassword: printf("     Missing Password\n"); break;
++						case InvalidPassword: printf("     Invalid Password\n"); break;
++						case SessionLimitExceeded: printf("     Session Limit Exceeded\n"); break;
++						case ResourceUnknown: printf("     Resource Unknown\n"); break;
++						case ResourceNotAvailable2: printf("     Resource Not Available\n"); break;
++						case InvalidContentsID: printf("     Invalid Contents ID\n"); break;
++						case ModeInconsistency: printf("     Mode Inconsistency\n"); break;
++						case PermissionRejected: printf("     Permission Rejected\n"); break;
++						case BracketRaceError: printf("     Bracket Race Error\n"); break;
++						case ProcedureNotSupported: printf("     Procedure Not Supported\n"); break;
++						case NAUContention: printf("     NAU Contention\n"); break;
++						case NAUNotAuthorized: printf("     NAU Not Authorized\n"); break;
++						case EndUserNotAuthorized: printf("     End User Not Authorized\n"); break;
++						case MissingRequesterID: printf("     Missing Requester ID\n"); break;
++						case Break: printf("     Break\n"); break;
++						case UnsufficientResource: printf("     Unsufficient Resource\n"); break;
++						case BracketBidReject: printf("     Bracket Bid Reject\n"); break;
++						case BracketBidReject2: printf("     Bracket Bid Reject\n"); break;
++						case FunctionActive: printf("     Function Active\n"); break;
++						case FunctionActive2: printf("     Function Active\n"); break;
++						case LinkOrLinkResourceInactive: printf("     Link or Link Resource Inactive\n"); break;
++						case LinkProcedureinProcess: printf("     Link Procedure in Process\n"); break;
++						case RTRNotRequired: printf("     RTR Not Required\n"); break;
++						case RequestSequenceError: printf("     Request Sequence Error\n"); break;
++						default:   printf("     Error code: %02x\n", Sense.SubReason);
++					}
++					break;
++				case RequestError: printf("    Request Error\n"); break;
++				case StateError: printf("    State Error\n"); break;
++				case ReqHdrUsageError: printf("    Request Header Usage Error\n"); break;
++				case PathError: printf("    Path Error\n"); break;
++			}
++			printf("     Specific Info: %04x\n", Sense.SpecificInfo);
++		}
++
++		if (StartOfData >= 0 && StartOfData < EndOfData)
++		{
++			printf("    Data:");
++			for (int DataIndex = StartOfData; DataIndex < EndOfData; DataIndex++)
++			{
++				printf(" %02x", Data[DataIndex]);
++			}
++			printf("\n");
++		}
++	}
++
++	ParsedSDLC SDLC;
++	ParsedFID2 FID2;
++	ParsedRU RU;
++	ParsedRequest Req;
++	ParsedResponce Res;
++	ParsedSenseData Sense;
++	int StartOfData;
++	int EndOfData;
++	bool bSDLCValid;
++	bool bFID2Valid;
++	bool bRequestValid;
++	bool bResponseValid;
++	bool bSenseValid;
++};
++
++void DumpPacket(const uint8_t *PacketData, int PacketSize)
++{
++	if (PacketSize > 2)
++	{
++		if (PacketData[0] == 0x40) // Addressed to us
++		{
++			printf("Packet for us\n");
++			if ((PacketData[1]&1) == 0)
++			{
++				printf("Information frame: Nr=%d Ns=%d", (PacketData[1]>>5)&7, (PacketData[1]>>1)&7);
++				printf(" Final=%d\n", (PacketData[1]>>4)&1);
++				if (PacketSize > 7)
++				{
++					if ((PacketData[2] & 0xF0) == 0x20)
++					{
++						printf("FID2\n");
++						if (PacketData[2] & 0x08)
++						{
++							printf("  Start of BIU\n");
++						}
++						if (PacketData[2] & 0x04)
++						{
++							printf("  End of BIU\n");
++						}
++						if (PacketData[2] & 0x02)
++						{
++							printf("  ODAI?\n");
++						}
++						if (PacketData[2] & 0x01)
++						{
++							printf("  Expedited\n");
++						}
++						printf(" Destination: %02x\n", PacketData[4]);
++						printf(" Origin: %02x\n", PacketData[5]);
++						printf(" Sequence: %04x\n", ((int)PacketData[6]<<8) | PacketData[7]);
++						if (PacketSize > 10)
++						{
++							bool bResponse = ((PacketData[8] & 0x80) != 0);
++							printf("  %s\n", bResponse ? "Response" : "Request");
++							switch (PacketData[8] & 0x60)
++							{
++								case 0x00: printf("   FM data\n"); break;
++								case 0x20: printf("   Network header\n"); break;
++								case 0x40: printf("   Data flow control\n"); break;
++								case 0x60: printf("   Session control\n"); break;
++							}
++							if (PacketData[8] & 0x08)
++							{
++								printf("   FM header follows\n");
++							}
++							if (PacketData[9]&0x80)
++							{
++								printf("   Definite Response 1\n");
++							}
++							if (PacketData[9]&0x20)
++							{
++								printf("   Definite Response 2\n");
++							}
++							if (!bResponse)
++							{
++								if (PacketData[9] & 0x10)
++								{
++									printf("   Exception Response\n");
++								}
++								switch (PacketData[8] & 0x03)
++								{
++									case 0: printf("   Middle of chain\n");
++									case 1: printf("   End of chain\n");
++									case 2: printf("   Start of chain\n");
++									case 3: printf("   Full chain\n");
++								}
++							}
++							else
++							{
++								printf("   %s response\n", (PacketData[9]&0x10)?"Negative":"Positive");
++							}
++							printf("   %s TC queues\n", (PacketData[9]&0x02)?"Enqueue in":"Bypass");
++							printf("   %sPAC\n", (PacketData[9]&0x01)?"":"!");
++							if (!bResponse)
++							{
++								if (PacketData[10] & 0x80)
++								{
++									printf("   Begin Bracket\n");
++								}
++								if (PacketData[10] & 0x40)
++								{
++									printf("   End Bracket\n");
++								}
++								if (PacketData[10] & 0x20)
++								{
++									printf("   Change Direction\n");
++								}
++								printf("   Code Selection: %d\n", (PacketData[10] & 0x08)?1:0);
++								if (PacketData[10] & 0x04)
++								{
++									printf("   RU is enciphered\n");
++								}
++								if (PacketData[10] & 0x02)
++								{
++									printf("   RU is padded\n");
++								}
++								if (PacketData[10] & 0x01)
++								{
++									printf("   Conditional End Bracket\n");
++								}
++							}
++							int StartOfData = 11;
++							if (PacketData[8] & 0x04)
++							{
++								printf("   Sense data included\n");
++								switch (PacketData[11])
++								{
++									case 0x00: printf("    User Sense Data Only\n"); break;
++									case 0x08:
++											   printf("    Request Reject\n");
++											   switch(PacketData[12])
++											   {
++												   case 0x01: printf("     Resource Not Available\n"); break;
++												   case 0x02: printf("     Intervention Required\n"); break;
++												   case 0x03: printf("     Missing Password\n"); break;
++												   case 0x04: printf("     Invalid Password\n"); break;
++												   case 0x05: printf("     Session Limit Exceeded\n"); break;
++												   case 0x06: printf("     Resource Unknown\n"); break;
++												   case 0x07: printf("     Resource Not Available\n"); break;
++												   case 0x08: printf("     Invalid Contents ID\n"); break;
++												   case 0x09: printf("     Mode Inconsistency\n"); break;
++												   case 0x0A: printf("     Permission Rejected\n"); break;
++												   case 0x0B: printf("     Bracket Race Error\n"); break;
++												   case 0x0C: printf("     Procedure Not Supported\n"); break;
++												   case 0x0D: printf("     NAU Contention\n"); break;
++												   case 0x0E: printf("     NAU Not Authorized\n"); break;
++												   case 0x0F: printf("     End User Not Authorized\n"); break;
++												   case 0x10: printf("     Missing Requester ID\n"); break;
++												   case 0x11: printf("     Break\n"); break;
++												   case 0x12: printf("     Unsufficient Resource\n"); break;
++												   case 0x13: printf("     Bracket Bid Reject\n"); break;
++												   case 0x14: printf("     Bracket Bid Reject\n"); break;
++												   case 0x15: printf("     Function Active\n"); break;
++												   case 0x16: printf("     Function Active\n"); break;
++												   case 0x17: printf("     Link or Link Resource Inactive\n"); break;
++												   case 0x18: printf("     Link Procedure in Process\n"); break;
++												   case 0x19: printf("     RTR Not Required\n"); break;
++												   case 0x1A: printf("     Request Sequence Error\n"); break;
++												   default:   printf("     Error code: %02x\n", PacketData[12]);
++											   }
++											   break;
++									case 0x10: printf("    Request Error\n"); break;
++									case 0x20: printf("    State Error\n"); break;
++									case 0x40: printf("    Request Header Usage Error\n"); break;
++									case 0x80: printf("    Path Error\n"); break;
++								}
++								printf("     Specific Info: %04x\n", ((int)PacketData[13]<<8) | PacketData[14]);
++								StartOfData += 4;
++							}
++							if (StartOfData < PacketSize - 1)
++							{
++								printf("   Data:");
++								for (int i=StartOfData; i<PacketSize-1; i++)
++								{
++									printf(" %02x", PacketData[i]);
++								}
++								printf("\n");
++							}
++						}
++					}
++				}
++			}
++			else
++			{
++				switch (PacketData[1] & 0xF)
++				{
++					case 1: printf("Recieve ready: Nr=%d", (PacketData[1]>>5)&7); break;
++					case 5: printf("Recieve not ready: Nr=%d", (PacketData[1]>>5)&7); break;
++					case 9: printf("Reject: Nr=%d", (PacketData[1]>>5)&7); break;
++					default:
++							switch (PacketData[1]&0xEF)
++							{
++								case 0x03: printf("Unnumbered info"); break;
++								case 0x07: printf("Request initialization mode"); break;
++								case 0x0F: printf("Disconnect mode"); break;
++								case 0x43: printf("Request disconnect"); break;
++								case 0x63: printf("Unnumbered ACK"); break;
++								case 0x87: printf("Frame reject"); break;
++								case 0xAF: printf("XID"); break;
++								case 0xC7: printf("Configure"); break;
++								case 0xE3: printf("Test"); break;
++								case 0xEF: printf("Beacon"); break;
++								default: printf("Not implemented: C=%02x", PacketData[1]); break;
++							}
++							break;
++				}
++				printf(" Final=%d\n", (PacketData[1]>>4)&1);
++			}
++		}
++	}
++}
++
++void ProcessPacket(const ParsedPacket& Packet, const uint8_t* Data);
++
++void informer_computer_device::received_byte(uint8_t byte)
++{
++	static uint8_t SavedPacket[256];
++	static int PacketByte = 0;
++	printf("Computer got byte: %02x\n", byte);
++	if (byte == 0x7E)
++	{
++		DumpPacket(SavedPacket, PacketByte);
++
++		ParsedPacket Packet;
++		Packet.Parse(SavedPacket, PacketByte);
++		Packet.Dump(SavedPacket);
++
++		ProcessPacket(Packet, SavedPacket);
++
++		PacketByte = 0;
++	}
++	else if (PacketByte < sizeof(SavedPacket))
++	{
++		SavedPacket[PacketByte++] = byte;
++	}
++}
++
++WRITE_LINE_MEMBER( informer_computer_device::input_rts )
++{
++	bRTS = state;
++}
++
++WRITE_LINE_MEMBER( informer_computer_device::input_etc )
++{
++	SendTestData();
++}
++
++INPUT_CHANGED_MEMBER(informer_computer_device::trigger_data)
++{
++	bSendData = !bSendData;
++}
++
++class RawStream
++{
++public:
++	void SendByte(uint8_t Byte)
++	{
++		SendRaw(Byte);
++		History[Head & (kHistorySize - 1)] = Byte;
++		Head++;
++	}
++
++	void Resend(int Start, int End)
++	{
++		for (int Current = Start; Current < End; Current++)
++		{
++			SendRaw(History[Current]);
++		}
++	}
++
++	int Tell() const
++	{
++		return Head;
++	}
++
++	int GetData(uint8_t *Destination) const // For debug
++	{
++		memcpy(Destination, History, Head);
++		return Head;
++	}
++
++	void Reset()
++	{
++		Head = 0;
++	}
++
++private:
++	void SendRaw(uint8_t Byte)
++	{
++		//printf("Sending: %02x\n", Byte);
++	}
++
++	static constexpr int kHistorySize = 4096;
++	uint8_t History[kHistorySize];
++	int Head = 0;
++};
++
++class SDLCInfoStream : public RawStream
++{
++public:
++	void SetRecieveCount(uint8_t NewCount)
++	{
++		RecieveCount = NewCount;
++	}
++
++	uint8_t RecieveCount = 0;
++	uint8_t SendCount = 0;
++};
++
++class SNAStream : public SDLCInfoStream
++{
++public:
++	void SetSequence(uint16_t NewSequence)
++	{
++		Sequence = NewSequence;
++	}
++
++	uint16_t Sequence = 0;
++};
++
++class SDLCPacket
++{
++public:
++	SDLCPacket(RawStream& Stream)
++		: Raw(Stream)
++	{
++		//SendData(Flag);
++		SendData(Address);
++	}
++	
++	void SendData(uint8_t Byte)
++	{
++		
++		Raw.SendByte(Byte);
++	}
++
++	void SendData(std::initializer_list<uint8_t> List)
++	{
++		for (uint8_t Byte : List)
++		{
++			SendData(Byte);
++		}
++	}
++
++	~SDLCPacket()
++	{
++		//SendData(0xCC);
++		SendData(0xCC);
++		SendData(Flag);
++	}
++
++protected:
++	static constexpr uint8_t Address = 0x40;
++	static constexpr uint8_t Flag = 0x7E;
++	static constexpr uint8_t FinalFlag = 0x10;
++
++	RawStream& Raw;
++};
++
++class SDLCReadyToRecieve : public SDLCPacket
++{
++public:
++	SDLCReadyToRecieve(SDLCInfoStream& Stream, bool bFinal = true)
++		: SDLCPacket(Stream)
++	{
++		uint8_t Counts = 0x01 + (bFinal ? FinalFlag : 0);
++		Counts |= (Stream.RecieveCount << 5) & 0xE0;
++		SendData(Counts);
++	}
++};
++
++class SDLCSetNormalResponseMode : public SDLCPacket
++{
++public:
++	SDLCSetNormalResponseMode(SDLCInfoStream& Stream, bool bFinal = true)
++		: SDLCPacket(Stream)
++	{
++		SendData(0x83 + (bFinal ? FinalFlag : 0));
++	}
++};
++
++class SDLCRequestXID : public SDLCPacket
++{
++public:
++	SDLCRequestXID(SDLCInfoStream& Stream, bool bFinal = true)
++		: SDLCPacket(Stream)
++	{
++		SendData(0xAF + (bFinal ? FinalFlag : 0));
++	}
++};
++
++class SDLCInfoPacket : public SDLCPacket
++{
++public:
++	SDLCInfoPacket(SDLCInfoStream& Stream, bool bFinal = false)
++		: SDLCPacket(Stream)
++	{
++		uint8_t Counts = (bFinal ? FinalFlag : 0);
++		Counts |= (Stream.RecieveCount << 5) & 0xE0;
++		Counts |= (Stream.SendCount << 1) & 0x0E;
++		Stream.SendCount++;
++		SendData(Counts);
++	}
++};
++
++class TranmissionPacket : public SDLCInfoPacket
++{
++public:
++	TranmissionPacket(SNAStream& Stream, uint8_t Destination, uint8_t Source, bool bExpedited = false, bool bFinal = false, int SequenceOverride = -1)
++		: SDLCInfoPacket(Stream, bFinal)
++	{
++		SendData(TransHeader + (bExpedited ? ExpiditedFlag : 0));
++		SendData(0); // Reserved
++		SendData(Destination);
++		SendData(Source);
++		if (SequenceOverride >= 0)
++		{
++			SendData((SequenceOverride >> 8) & 0xFF);
++			SendData((SequenceOverride >> 0) & 0xFF);
++		}
++		else
++		{
++			SendData((Stream.Sequence >> 8) & 0xFF);
++			SendData((Stream.Sequence >> 0) & 0xFF);
++			if (!bExpedited)
++			{
++				Stream.Sequence++;
++			}
++		}
++	}
++
++private:
++	static constexpr uint8_t TransHeader = 0x2C; // FID 2 + whole BIU
++	static constexpr uint8_t ExpiditedFlag = 0x01;
++};
++
++class RequestPacket : public TranmissionPacket
++{
++public:
++	RequestPacket(SNAStream& Stream, uint8_t Category, uint8_t Destination, uint8_t Source, bool bExpedited = false, bool bFinal = false, bool bChangeDirection = false, bool bStartOfBracket = true)
++		: TranmissionPacket(Stream, Destination, Source, bExpedited, bFinal)
++	{
++		SendData((Category << 5) | 3); // Category + Start+end of chain
++		SendData(0x80 + (bChangeDirection?0x20:0x00)); // Definitive response required
++		SendData(bStartOfBracket ? 0xC0 : 0x40); // Start and end of bracket
++	}
++};
++
++class PositiveResponsePacket : public TranmissionPacket
++{
++public:
++	PositiveResponsePacket(SNAStream& Stream, uint8_t Category, uint8_t Destination, uint8_t Source, int SequenceOverride, bool bExpedited = false, bool bFinal = false)
++		: TranmissionPacket(Stream, Destination, Source, bExpedited, bFinal, SequenceOverride)
++	{
++		SendData((Category << 5) | 0x83); // Category + Response
++		SendData(0x80); // Definitive response + Positive
++		SendData(0x00);
++	}
++};
++
++char EBCDICToASCII[256];
++char ASCIIToEBCDIC[256];
++
++void Map(char ASCII, char EBCDIC)
++{
++	EBCDICToASCII[(uint8_t)EBCDIC] = ASCII;
++	ASCIIToEBCDIC[(uint8_t)ASCII] = EBCDIC;
++}
++
++void Map(char ASCIIStart, char ASCIIEnd, char EBCDIC)
++{
++	for (char ASCII = ASCIIStart; ASCII <= ASCIIEnd; ASCII++)
++	{
++		Map(ASCII, EBCDIC++);
++	}
++}
++
++void BuildTextTables()
++{
++	memset(EBCDICToASCII, ' ', sizeof (EBCDICToASCII));
++	memset(ASCIIToEBCDIC, 0x40, sizeof (ASCIIToEBCDIC));
++
++	Map('a', 'i', 0x81);
++	Map('j', 'r', 0x91);
++	Map('s', 'z', 0xA2);
++	Map('A', 'I', 0xC1);
++	Map('J', 'R', 0xD1);
++	Map('S', 'Z', 0xE2);
++	Map('0', '9', 0xF0);
++	Map('\n', 0x15);
++	Map(' ', 0x40);
++	Map(0xA2, 0x4A);
++	Map('.', 0x4B);
++	Map('<', 0x4C);
++	Map('(', 0x4D);
++	Map('+', 0x4E);
++	Map('|', 0x4F);
++	Map('&', 0x50);
++	Map('!', 0x5A);
++	Map('$', 0x5B);
++	Map('*', 0x5C);
++	Map(')', 0x5D);
++	Map(';', 0x5E);
++	Map(0xAC, 0x5F);
++	Map('-', 0x60);
++	Map('/', 0x61);
++	Map(0xA6, 0x6A);
++	Map(',', 0x6B);
++	Map('%', 0x6C);
++	Map('_', 0x6D);
++	Map('>', 0x6E);
++	Map('?', 0x6F);
++	Map(':', 0x7A);
++	Map('#', 0x7B);
++	Map('@', 0x7C);
++	Map('\'', 0x7D);
++	Map('=', 0x7E);
++	Map('"', 0x7F);
++}
++
++class NetworkState
++{
++	enum EState
++	{
++		StateXID,
++		StateNrm,
++		StateActPU,
++		StateActLU,
++		StateBind,
++		StateDataReset,
++		StateSendScreen,
++		StateWaitForInput,
++		StateRespond
++	};
++
++public:
++	NetworkState()
++	{
++		BuildTextTables();
++	}
++
++	int GenerateNewPackets(uint8_t* Buffer)
++	{
++		Stream.Reset();
++		switch (State)
++		{
++			case StateXID:
++			{
++				SDLCRequestXID XID(Stream);
++				State = StateNrm;
++				break;
++			}
++			case StateNrm:
++			{
++				SDLCSetNormalResponseMode SetNrmRes(Stream);
++				State = StateActPU;
++				break;
++			}
++			case StateActPU:
++			{
++				Stream.SetSequence(0x1568);
++				{
++					RequestPacket ACTPU(Stream, 3, 0, 0, true);
++					ACTPU.SendData({0x11, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A});
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateActLU;
++				break;
++			}
++			case StateActLU:
++			{
++				Stream.SetSequence(0x1569);
++				{
++					RequestPacket ACTLU(Stream, 3, 2, 0, true);
++					ACTLU.SendData({0x0D, 0x01, 0x01});
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateBind;
++				break;
++			}
++			case StateBind:
++			{
++				Stream.SetSequence(0x0);
++				{
++					RequestPacket Bind(Stream, 3, 2, 1);
++					Bind.SendData({
++							0x31, 0x01, 0x03, 0x03, 0xA1, 0xA1, 0x30, 0x80, 0x00,
++							0x01, 0x85, 0x85, 0x0A, 0x00, 0x02, 0x11, 0x00, 0x00,
++							0xB1, 0x00, 0xC0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
++							0x04, 0xD1, 0xE2, 0xC9, 0xD6, 0x00
++							});
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateDataReset;
++				break;
++			}
++			case StateDataReset:
++			{
++				{
++					RequestPacket DataReset(Stream, 3, 2, 1);
++					DataReset.SendData(0xA0);
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateSendScreen;
++				break;
++			}
++			case StateSendScreen:
++			{
++				{
++					RequestPacket DataStream3270(Stream, 0, 2, 1);
++					DataStream3270.SendData({0xF1, 0xD3, 0x11, 0x5C, 0xF0, 0x1D, 0xF0});
++					const char* Message = "State machine ";
++					while (*Message)
++					{
++						DataStream3270.SendData(ASCIIToEBCDIC[(uint8_t)*Message++]);
++					}
++					DataStream3270.SendData({0x6E, 0x40, 0x1D, 0x40, 0x13, 0x11, 0x5D, 0x7F, 0x1D, 0xF0});
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateWaitForInput;
++				break;
++			}
++			case StateWaitForInput:
++			{
++				SDLCReadyToRecieve RR(Stream);
++				break;
++			}
++			case StateRespond:
++			{
++				{
++					// TODO: ERI?
++					PositiveResponsePacket Response(Stream, 0, 2, 1, ProcessedPacket);
++					Response.SendData({0x7d, 0x5d, 0xc3, 0x11, 0x5d, 0xc2, 0xf4});
++				}
++				{
++					RequestPacket DataReset(Stream, 0, 2, 1, false, false, false, false);
++				}
++				{
++					SDLCReadyToRecieve RR(Stream);
++				}
++				State = StateWaitForInput;
++				break;
++			}
++		}
++		return Stream.GetData(Buffer);
++	}
++
++	void ProcessPacket(const ParsedPacket& Packet, const uint8_t* Data)
++	{
++		if (Packet.bSDLCValid)
++		{
++			if (Packet.SDLC.bSendCountValid)
++			{
++				Stream.SetRecieveCount(Packet.SDLC.RecieveCount);
++			}
++		}
++		if (Packet.bRequestValid && Packet.Req.bChangeDirection)
++		{
++			if (Packet.FID2.Sequence != ProcessedPacket)
++			{
++				State = StateRespond;
++				if (Packet.bResponseValid || Packet.bRequestValid)
++				{
++					//Stream.SetSequence(Packet.FID2.Sequence + 1);
++					ProcessedPacket = Packet.FID2.Sequence;
++				}
++			}
++		}
++	}
++
++private:
++	EState State = StateNrm;
++	SNAStream Stream;
++	uint16_t ProcessedPacket = 0xFFFF;
++};
++
++NetworkState Network;
++
++void ProcessPacket(const ParsedPacket& Packet, const uint8_t* Data)
++{
++	Network.ProcessPacket(Packet, Data);
++}
++
++void informer_computer_device::SendTestData()
++{
++	if (!bSendData)
++	{
++		return;
++	}
++
++	if (!bRTS)
++	{
++		return;
++	}
++
++	static uint8_t SendBuffer[512];
++	static int Size = 0;
++	static int Counter = 0;
++	int Idx = (Counter >> 1);
++
++	if (Idx >= Size)
++	{
++		Size = Network.GenerateNewPackets(SendBuffer);
++		Counter = 0;
++	}
++
++	if (Counter&1)
++	{
++		if (Idx < Size)
++		{
++			int ToSend = SendBuffer[Idx];
++			uint8_t byte = (uint8_t)ToSend;
++			printf("Computer sending byte: %02x\n", byte);
++			send_byte(byte);
++		}
++	}
++	Counter++;
++}
++
++DEFINE_DEVICE_TYPE(INFORMER_COMPUTER, informer_computer_device, "informer_computer", "Informer Computer")
++
++void rs232_devices(device_slot_interface &device)
++{
++	device.option_add("informer_rs232", SERIAL_INFORMER);
++	device.option_add("informer_keyboard", INFORMER_KEYBOARD);
++	device.option_add("informer_computer", INFORMER_COMPUTER);
++}
++
++class informer207_state : public driver_device
++{
++public:
++	informer207_state(const machine_config &mconfig, device_type type, const char *tag)
++		: driver_device(mconfig, type, tag)
++		, m_maincpu(*this, "maincpu")
++		, m_crtc(*this, "68b45")
++		, m_scc(*this, "scc")
++		, m_aciaA(*this, "68b50a")
++		, m_aciaB(*this, "68b50b")
++		, m_p_videoram(*this, "mainram")
++		, m_p_chargen(*this, "chargen")
++		, m_nvram(*this, "nvram")
++	{ }
++
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_reset);
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_nmi);
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_irq);
++	DECLARE_INPUT_CHANGED_MEMBER(trigger_firq);
++
++	DECLARE_WRITE8_MEMBER(crtc_address_w);
++	DECLARE_WRITE8_MEMBER(crtc_register_w);
++	DECLARE_READ8_MEMBER(crtc_status_r);
++	DECLARE_WRITE8_MEMBER(unknown_w);
++	DECLARE_READ8_MEMBER(unknown_r);
++
++	DECLARE_READ8_MEMBER(nvram_r);
++	DECLARE_WRITE8_MEMBER(nvram_w);
++
++	DECLARE_WRITE_LINE_MEMBER(scc_int);
++	DECLARE_WRITE_LINE_MEMBER( acia_irq_w );
++
++	void informer207(machine_config &config);
++
++protected:
++	virtual void machine_start() override;
++	virtual void machine_reset() override;
++	virtual void video_start() override;
++
++private:
++	void informer207_mem(address_map &map);
++
++	required_device<cpu_device> m_maincpu;
++	required_device<mc6845_device> m_crtc;
++	required_device<scc85c30_device> m_scc;
++	required_device<acia6850_device> m_aciaA;
++	required_device<acia6850_device> m_aciaB;
++	required_shared_ptr<u8> m_p_videoram;
++	required_region_ptr<u8> m_p_chargen;
++
++	required_device<nvram_device> m_nvram;
++	std::unique_ptr<u8[]> m_nvram_data;
++
++	MC6845_UPDATE_ROW(crtc_update_row);
++};
++
++WRITE8_MEMBER( informer207_state::crtc_address_w )
++{
++	m_crtc->address_w(data);
++	printf("Address write: %02x\n", data);
++}
++
++READ8_MEMBER( informer207_state::crtc_status_r )
++{
++	return m_crtc->register_r();
++}
++
++WRITE8_MEMBER( informer207_state::crtc_register_w )
++{
++	m_crtc->register_w(data);
++	printf("Data write: %02x\n", data);
++}
++
++READ8_MEMBER( informer207_state::unknown_r )
++{
++	(void)SerialData;
++	u32 addr=offset+0x8400;
++	//printf("<- %s(+%04x)\n", tag(), addr);
++
++static int SendNext = 0;
++
++	if (addr==0x8802)
++	{
++		static int Delay=0;
++		Delay++;
++		if (Delay > 128)
++		{
++			SendNext = 1;
++			Delay = 0;
++		}
++		else 
++		{
++			return 0;
++		}
++		return (1<<0)|(1<<1)|(0<<2)|(0<<3)|(0<<4)|(0<<5)|(0<<6)|(0<<7);
++	}
++	else if (addr==0x8804)
++	{
++		return 2;
++	}
++	else if (addr == 0x8803)
++	{
++		if (SendNext == 1)
++		{
++			//SendNext =0;
++		
++			//int value=-1;
++			//scanf("%02x", &value);
++			//printf("Sending:%08x\n", value);
++			//return (u8)value;
++
++		SendNext =0;
++		static int Idx = 0x9100;
++		int ToSend=Idx >> 1;
++		if (Idx & 1)
++		{
++			ToSend>>=8;
++		}
++		Idx++;
++		printf("Sending(3):%08x\n", Idx);
++		return (u8)ToSend;
++		}
++	}
++	/*
++	else if (addr ==0x8804)
++	{
++		return 2;
++	}
++	*/
++	/*
++
++//0x8804 Only 0x02 and 0x08 matter
++
++	else if (addr==0x8400 || addr==0x8804)
++	{
++		static int Idx2 = 0;
++		if (Idx2 >= sizeof(SerialData))
++		{
++			Idx2 = 0;
++		}
++		printf("Sending(2):%08x\n", SerialData[Idx2]);
++		return SerialData[Idx2++];
++	}
++	*/
++	return 0xFF;
++}
++
++WRITE8_MEMBER( informer207_state::unknown_w )
++{
++	printf("%s(+%04x) -> %02x (%c)\n", tag(), offset+0x8400, data, data);
++}
++
++WRITE_LINE_MEMBER( informer207_state::scc_int )
++{
++	//printf("SCCint:%d\n", state);
++	m_maincpu->set_input_line(M6809_IRQ_LINE, state ? ASSERT_LINE : CLEAR_LINE);
++}
++
++READ8_MEMBER( informer207_state::nvram_r )
++{
++	return m_nvram_data[offset];
++}
++
++WRITE8_MEMBER( informer207_state::nvram_w )
++{
++	m_nvram_data[offset] = data;
++}
++
++MC6845_UPDATE_ROW( informer207_state::crtc_update_row )
++{
++	uint32_t *p = &bitmap.pix32(y);
++	for (int column = 0; column < x_count; column++)
++	{
++		u8 VideoChar = m_p_videoram[ma+column];
++		VideoChar = (ra<=8)?m_p_chargen[16*VideoChar+ra]:((column==cursor_x)?0xFF:0x00);
++		for (int x=0; x<8; x++)
++		{
++			*p++ = rgb_t(0, (VideoChar&0x80)?255:0, 0);
++			VideoChar <<= 1;
++		}
++	}
++}
++
++void informer207_state::informer207_mem(address_map &map)
++{
++	map.unmap_value_low();
++	map(0x0000, 0x7fff).ram().share("mainram");
++	map(0x8000, 0x8000).rw(FUNC(informer207_state::crtc_status_r), FUNC(informer207_state::crtc_address_w));
++	map(0x8001, 0x8001).w(FUNC(informer207_state::crtc_register_w));
++	
++	map(0x8400, 0x9bff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); // J2
++
++	//map(0x8400, 0x87ff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); // J2
++	//map(0x8800, 0x8bff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); ; // J3
++	//map(0x8C00, 0x8fff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); ; // J3
++	//map(0x9000, 0x93ff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); ; // J2
++	//map(0x9400, 0x97ff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); ; // J3
++	//map(0x9800, 0x9bff).rw(FUNC(informer207_state::unknown_r), FUNC(informer207_state::unknown_w)); ; // DM74LSOON/1 (top left)
++
++	map(0x8802, 0x8803).rw(m_aciaA, FUNC(acia6850_device::read), FUNC(acia6850_device::write));
++	map(0x8804, 0x8805).rw(m_aciaB, FUNC(acia6850_device::read), FUNC(acia6850_device::write));
++
++	map(0x9400, 0x9400).rw(m_scc, FUNC(scc85c30_device::cb_r), FUNC(scc85c30_device::cb_w)); /* Dual serial port Z80-SCC */
++	map(0x9401, 0x9401).rw(m_scc, FUNC(scc85c30_device::db_r), FUNC(scc85c30_device::db_w)); /* Dual serial port Z80-SCC */
++	
++	map(0x9402, 0x9402).rw(m_scc, FUNC(scc85c30_device::ca_r), FUNC(scc85c30_device::ca_w)); /* Dual serial port Z80-SCC */
++	map(0x9403, 0x9403).rw(m_scc, FUNC(scc85c30_device::da_r), FUNC(scc85c30_device::da_w)); /* Dual serial port Z80-SCC */
++
++	//map(0x9C00, 0x9cff).ram();
++	map(0x9c00, 0x9cff).rw(FUNC(informer207_state::nvram_r), FUNC(informer207_state::nvram_w));
++	map(0xa000, 0xffff).rom().region("mainrom", 0);
++}
++
++void informer207_state::machine_start()
++{
++	m_nvram_data = std::make_unique<u8[]>(0x100);
++	m_nvram->set_base(m_nvram_data.get(), 0x100);
++	save_pointer(NAME(m_nvram_data), 0x100);
++}
++
++void informer207_state::machine_reset()
++{
++}
++
++INPUT_CHANGED_MEMBER(informer207_state::trigger_reset)
++{
++	m_maincpu->set_input_line(INPUT_LINE_RESET, newval ? CLEAR_LINE : ASSERT_LINE);
++
++	if (newval)
++	{
++		machine().schedule_soft_reset();
++	}
++}
++
++INPUT_CHANGED_MEMBER(informer207_state::trigger_nmi)
++{
++	m_maincpu->set_input_line(INPUT_LINE_NMI, newval ? CLEAR_LINE : ASSERT_LINE);
++}
++
++INPUT_CHANGED_MEMBER(informer207_state::trigger_irq)
++{
++	m_maincpu->set_input_line(M6809_IRQ_LINE, newval ? CLEAR_LINE : ASSERT_LINE);
++}
++
++INPUT_CHANGED_MEMBER(informer207_state::trigger_firq)
++{
++	m_maincpu->set_input_line(M6809_FIRQ_LINE, newval ? CLEAR_LINE : ASSERT_LINE);
++}
++
++WRITE_LINE_MEMBER( informer207_state::acia_irq_w )
++{
++	printf("ACIA IRQ\n");
++	m_maincpu->set_input_line(M6809_IRQ_LINE, state);
++}
++
++void informer207_state::informer207(machine_config &config)
++{
++	constexpr int CharWidth = 8;
++	constexpr int CharHeight = 10;
++	constexpr int Width = CharWidth*80;
++	constexpr int Height = CharHeight*26;
++
++	MC6809(config, m_maincpu, 36_MHz_XTAL / 4); // Check this
++	m_maincpu->set_addrmap(AS_PROGRAM, &informer207_state::informer207_mem);
++
++	NVRAM(config, m_nvram, nvram_device::DEFAULT_ALL_0); // X2212P x 2
++
++	MC6845(config, m_crtc, 36_MHz_XTAL);  // Check this 
++	m_crtc->set_screen("screen");
++	m_crtc->set_show_border_area(false);
++	m_crtc->set_char_width(CharWidth);
++	m_crtc->set_update_row_callback(FUNC(informer207_state::crtc_update_row), this);
++
++	SCC85C30(config, m_scc, 0); // Check this
++	m_scc->out_int_callback().set(FUNC(informer207_state::scc_int));
++
++	m_scc->out_txda_callback().set("rs232trma", FUNC(rs232_port_device::write_txd));
++	m_scc->out_dtra_callback().set("rs232trma", FUNC(rs232_port_device::write_dtr));
++	m_scc->out_rtsa_callback().set("rs232trma", FUNC(rs232_port_device::write_rts));
++
++	rs232_port_device &rs232trma(RS232_PORT(config, "rs232trma", rs232_devices, "informer_computer"));
++	rs232trma.rxd_handler().set(m_scc, FUNC(scc85c30_device::rxa_w));
++	rs232trma.dcd_handler().set(m_scc, FUNC(scc85c30_device::dcda_w));
++	rs232trma.cts_handler().set(m_scc, FUNC(scc85c30_device::ctsa_w));
++
++	m_scc->out_txdb_callback().set("rs232trmb", FUNC(rs232_port_device::write_txd));
++	m_scc->out_dtrb_callback().set("rs232trmb", FUNC(rs232_port_device::write_dtr));
++	m_scc->out_rtsb_callback().set("rs232trmb", FUNC(rs232_port_device::write_rts));
++	
++	rs232_port_device &rs232trmb(RS232_PORT(config, "rs232trmb", rs232_devices, "informer_rs232"));
++	rs232trmb.rxd_handler().set(m_scc, FUNC(scc85c30_device::rxb_w));
++	rs232trmb.dcd_handler().set(m_scc, FUNC(scc85c30_device::dcda_w));
++	rs232trmb.cts_handler().set(m_scc, FUNC(scc85c30_device::ctsb_w));
++	
++	clock_device &scc_clock(CLOCK(config, "scc_clock", 2400));
++	scc_clock.signal_handler().set("scc", FUNC(scc85c30_device::rxca_w));
++	scc_clock.signal_handler().append("scc", FUNC(scc85c30_device::txca_w));
++	scc_clock.signal_handler().append("scc", FUNC(scc85c30_device::rxcb_w));
++	scc_clock.signal_handler().append("scc", FUNC(scc85c30_device::txcb_w));
++
++	clock_device &acia_clock(CLOCK(config, "acia_clock", 153600));
++	acia_clock.signal_handler().set("68b50a", FUNC(acia6850_device::write_txc));
++	acia_clock.signal_handler().append("68b50a", FUNC(acia6850_device::write_rxc));
++	acia_clock.signal_handler().append("68b50b", FUNC(acia6850_device::write_txc));
++	acia_clock.signal_handler().append("68b50b", FUNC(acia6850_device::write_rxc));
++
++	ACIA6850(config, m_aciaA, 0);
++	m_aciaA->txd_handler().set("aciaa", FUNC(rs232_port_device::write_txd));
++	m_aciaA->irq_handler().set(FUNC(informer207_state::acia_irq_w));
++	
++	rs232_port_device &aciaa(RS232_PORT(config, "aciaa", rs232_devices, "informer_keyboard"));
++	aciaa.rxd_handler().set(m_aciaA, FUNC(acia6850_device::write_rxd));
++	aciaa.cts_handler().set(m_aciaA, FUNC(acia6850_device::write_cts));
++	
++	ACIA6850(config, m_aciaB, 0);
++	m_aciaB->txd_handler().set("aciab", FUNC(rs232_port_device::write_txd));
++	m_aciaB->irq_handler().set(FUNC(informer207_state::acia_irq_w));
++	
++	rs232_port_device &aciab(RS232_PORT(config, "aciab", rs232_devices, "informer_rs232"));
++	aciab.rxd_handler().set(m_aciaB, FUNC(acia6850_device::write_rxd));
++	aciab.cts_handler().set(m_aciaB, FUNC(acia6850_device::write_cts));
++
++	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_RASTER));
++	screen.set_physical_aspect(4,3);
++	screen.set_size(Width, Height);
++	screen.set_visarea(0, Width-1, 0, Height-1);
++	screen.set_screen_update("68b45", FUNC(mc6845_device::screen_update));
++	screen.set_refresh_hz(60);
++	
++	clock_device &send_clock(CLOCK(config, "send_clock", 200));
++	send_clock.signal_handler().set("rs232trma", FUNC(rs232_port_device::write_etc));
++
++}
++
++void informer207_state::video_start()
++{
++}
++
++/***************************************************************************
++    ROM definitions
++***************************************************************************/
++
++static INPUT_PORTS_START( informer207 )
++	PORT_START("reset")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("RST") PORT_CODE(KEYCODE_R)  PORT_CHANGED_MEMBER(DEVICE_SELF, informer207_state, trigger_reset, nullptr)
++	PORT_START("nmi")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("NMI") PORT_CODE(KEYCODE_N) PORT_CHANGED_MEMBER(DEVICE_SELF, informer207_state, trigger_nmi, nullptr)
++	PORT_START("irq")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("IRQ") PORT_CODE(KEYCODE_I) PORT_CHANGED_MEMBER(DEVICE_SELF, informer207_state, trigger_irq, nullptr)
++	PORT_START("firq")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_NAME("FIRQ") PORT_CODE(KEYCODE_F) PORT_CHANGED_MEMBER(DEVICE_SELF, informer207_state, trigger_firq, nullptr)
++INPUT_PORTS_END
++
++ROM_START( informer207 )
++	ROM_REGION(0x6000, "mainrom", 0)
++	ROM_LOAD("combined.bin", 0x0, 0x6000, NO_DUMP)
++	ROM_REGION(0x1000, "chargen", 0)
++	ROM_LOAD("chargen.bin", 0x0, 0x1000, NO_DUMP)
++ROM_END
++
++/* Driver */
++
++/*    YEAR  NAME           PARENT    COMPAT  MACHINE        INPUT        CLASS              INIT        COMPANY     FULLNAME        FLAGS */
++COMP( 1987, informer207,   0,        0,      informer207,   informer207, informer207_state, empty_init, "Informer", "Informer 207", MACHINE_NO_SOUND_HW )
+diff --git a/src/mame/mame.lst b/src/mame/mame.lst
+index 60c9e4eaaf..a4f1d184d9 100644
+--- a/src/mame/mame.lst
++++ b/src/mame/mame.lst
+@@ -15915,6 +15915,9 @@ indy_4613                       // IP22: Indy, R4600, 133MHz
+ indy_5015                       // IP22: Indy, R5000, 150MHz
+ indigo2_4415                    // IP24: Indigo 2, R4400, 150MHz
+ 
++@source:informer207.cpp
++informer207                     //
++
+ @source:instantm.cpp
+ instantm                        //
+ 
+diff --git a/src/mame/mess.flt b/src/mame/mess.flt
+index 772cfa6b4d..905bed0b64 100644
+--- a/src/mame/mess.flt
++++ b/src/mame/mess.flt
+@@ -358,6 +358,7 @@ imsai.cpp
+ indiana.cpp
+ indigo.cpp
+ indy_indigo2.cpp
++informer207.cpp
+ instruct.cpp
+ inteladv.cpp
+ intellec4.cpp
