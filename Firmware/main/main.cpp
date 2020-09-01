@@ -40,6 +40,8 @@ extern "C"
 
 #define STORAGE_NAMESPACE "settingsns"
 
+#define TOTAL_GAME_FLASH_SIZE		(768*1024)
+
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
 
@@ -148,20 +150,30 @@ void WifiStartListening(void *pvParameters)
 				{
 					"GET /",
 					"POST / HTTP/",
-					"POST /index.html HTTP/"
+					"POST /index.html HTTP/",
+					"POST /game.html HTTP/"
 				};
 
 				bool bReturnIndex = false;
 				bool bStartRecieving = false;
+				bool bUploadingGame = false;
+				ESP_LOGI("ota", "got:%s", WifiBuffer);
 				for (int i = 0; i < ARRAY_NUM(ExpectedRequests); i++)
 				{
+					ESP_LOGI("ota", "testing:%s", ExpectedRequests[i]);
 					int Len = strlen(ExpectedRequests[i]);
 					if (Recieved >= Len && strncmp(WifiBuffer, ExpectedRequests[i], Len) == 0)
 					{
+						ESP_LOGI("ota", "matched:%s", ExpectedRequests[i]);
 						if (strncmp(WifiBuffer, "POST", 4) == 0)
+						{
 							bStartRecieving = true;
+							bUploadingGame = (i == 3);
+						}
 						else
+						{
 							bReturnIndex = true;
+						}
 						break;
 					}
 				}
@@ -188,12 +200,22 @@ void WifiStartListening(void *pvParameters)
 					esp_err_t ErrorCode = ESP_OK;
 					bool bWaitingForStart = true;
 					esp_ota_handle_t UpdateHandle = 0 ;
-					const esp_partition_t *UpdatePartition = esp_ota_get_next_update_partition(nullptr);
+					const esp_partition_t *UpdatePartition = nullptr;
+					
+					if (bUploadingGame)
+					{
+						UpdatePartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "games");
+					}
+					else
+					{
+					 	UpdatePartition = esp_ota_get_next_update_partition(nullptr);
+					}
+					
 					ESP_LOGI("ota", "partition:%p", UpdatePartition);
 
-					if (Length > 0)
+					if (UpdatePartition && Length > 0)
 					{
-
+						size_t UploadOffset = 0;
 						while (Length > 0)
 						{
 							Recieved = recv(ClientSock, &WifiBuffer, sizeof(WifiBuffer) - 1, 0);
@@ -203,11 +225,18 @@ void WifiStartListening(void *pvParameters)
 							WifiBuffer[Recieved] = 0;
 							if (bWaitingForStart)
 							{
-								const char *Start = strstr(WifiBuffer, "LGV_FIRM");
+								const char *Start = strstr(WifiBuffer, bUploadingGame?"LGV_DATA":"LGV_FIRM");
 								if (Start)
 								{
 									bWaitingForStart = false;
-    								ErrorCode = esp_ota_begin(UpdatePartition, OTA_SIZE_UNKNOWN, &UpdateHandle);
+									if (bUploadingGame) // Erase flash
+									{
+										ErrorCode = esp_partition_erase_range(UpdatePartition, 0, TOTAL_GAME_FLASH_SIZE);
+									}
+									else
+									{
+										ErrorCode = esp_ota_begin(UpdatePartition, OTA_SIZE_UNKNOWN, &UpdateHandle);
+									}
 									ESP_LOGI("ota", "ota begin:%d", ErrorCode);
 
 									const char* StartOfFirmware = Start + strlen("LGV_FIRM");
@@ -216,7 +245,15 @@ void WifiStartListening(void *pvParameters)
 									{
 										if (ErrorCode == ESP_OK)
 										{
-											ErrorCode = esp_ota_write(UpdateHandle, StartOfFirmware, Afterwards);
+											if (bUploadingGame)
+											{
+												ErrorCode = esp_partition_write(UpdatePartition, UploadOffset, StartOfFirmware, Afterwards);
+												UploadOffset += Afterwards;
+											}
+											else
+											{
+												ErrorCode = esp_ota_write(UpdateHandle, StartOfFirmware, Afterwards);
+											}
 											ESP_LOGI("ota", "ota write (a):%d", ErrorCode);
 										}
 									}
@@ -224,25 +261,43 @@ void WifiStartListening(void *pvParameters)
 							}
 							else if (ErrorCode == ESP_OK)
 							{
-								ErrorCode = esp_ota_write(UpdateHandle, WifiBuffer, Recieved);
-								ESP_LOGI("ota", "ota write (b):%d", ErrorCode);
+								if (bUploadingGame)
+								{
+									int SizeOfGameData = TOTAL_GAME_FLASH_SIZE;
+									int TruncatedRecieved = Recieved;
+									if (UploadOffset + TruncatedRecieved > SizeOfGameData)
+									{
+										ESP_LOGI("ota", "throwing away end of buffer (%d bytes)", Recieved + UploadOffset - SizeOfGameData);
+										TruncatedRecieved = SizeOfGameData - UploadOffset;
+									}
+									ErrorCode = esp_partition_write(UpdatePartition, UploadOffset, WifiBuffer, TruncatedRecieved);
+									UploadOffset += TruncatedRecieved;
+								}
+								else
+								{
+									ErrorCode = esp_ota_write(UpdateHandle, WifiBuffer, Recieved);
+								}
+								ESP_LOGI("ota", "ota write (b):%d UploadOffset:%d Received:%d", ErrorCode, UploadOffset, Recieved);
 							}
 							Length -= Recieved;
 						}
 					}
 
-					if (ErrorCode == ESP_OK)
+					if (!bUploadingGame)
 					{
-						ErrorCode = esp_ota_end(UpdateHandle);
-						ESP_LOGI("ota", "ota end:%d", ErrorCode);
+						if (ErrorCode == ESP_OK)
+						{
+							ErrorCode = esp_ota_end(UpdateHandle);
+							ESP_LOGI("ota", "ota end:%d", ErrorCode);
+						}
+
+						if (ErrorCode == ESP_OK)
+						{
+							ErrorCode = esp_ota_set_boot_partition(UpdatePartition);
+							ESP_LOGI("ota", "set boot:%d", ErrorCode);
+						}
 					}
 
-					if (ErrorCode == ESP_OK)
-					{
-						ErrorCode = esp_ota_set_boot_partition(UpdatePartition);
-						ESP_LOGI("ota", "set boot:%d", ErrorCode);
-					}
-        
 					ESP_LOGI("ota", "error code:%d", ErrorCode);
 					ESP_LOGI("ota", "length:%d", Length);
 					ESP_LOGI("ota", "waiting for start:%d", bWaitingForStart);
@@ -269,7 +324,17 @@ void WifiStartListening(void *pvParameters)
 					const char* BadResponse = "HTTP/1.0 404 NOT FOUND\r\nContent-Type: text/html\r\n\r\n<!doctype html><title>Not Found</title><body>Page not found :(</body>";
 					const char* Response = bReturnIndex ? GoodResponse : BadResponse;
 
-					snprintf(OutBuffer, sizeof(OutBuffer), Response, Config.Dummy);
+					FATFS *FatFSInfo;
+					DWORD FreeClusters;
+					FRESULT FreeError = f_getfree("0:", &FreeClusters, &FatFSInfo);
+					int FreeSize = -1024;
+					if (FreeError == FR_OK)
+					{
+						DWORD FreeSectors = FreeClusters * FatFSInfo->csize;
+						FreeSize = FreeSectors * CONFIG_WL_SECTOR_SIZE;
+					}
+
+					snprintf(OutBuffer, sizeof(OutBuffer), Response, Config.Dummy, FreeSize / 1024);
 
 					send(ClientSock, OutBuffer, strlen(OutBuffer), 0);
 					
@@ -363,6 +428,7 @@ void GameTask(void *pvParameters)
 	// # To write to the partition
 	// Tool at ~/esp/esp-idf/components/partition_table/parttool2.py (2 is own name for newer github version)
 	// parttool.py --port "/dev/tty.SLAB_USBtoUART" write_partition --partition-name=games --input "GameData.bin"
+	// Or use update_game.sh to update via WiFi
 	const void *GameData = nullptr;
 	const esp_partition_t* GamesPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "games");
 	spi_flash_mmap_handle_t FlashHandle = 0;

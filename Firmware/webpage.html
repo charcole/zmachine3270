@@ -45,7 +45,17 @@
 			</p>
 			<p><hr></p>
 		</form>
-		<p> Current firmware version 1.0 (2020/6/9) </p>
+		<p><i>Flash file system has approximately $d Kb free</i></p>
+		<hr>
+		<p>
+			Upload new game file (should be 768Kb and start with LGV_DATA):
+			<form id="gamebanner" enctype="multipart/form-data" method="post" action="/game.html">
+				<input id="gameupload" name="gamefile" type="file"/>
+				<input type="submit" value="Upload" id="submit"/>
+			</form>
+		</p>
+		<hr>
+		<p> Current firmware version 1.1 (2020/8/30) </p>
 		<p>
 			Upload new .bin file:
 			<form id="uploadbanner" enctype="multipart/form-data" method="post" action="#">
