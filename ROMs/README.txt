@@ -6,3 +6,5 @@ ROM dumps from the system board:
 
 combined.bin is the two numbered ROMs containing the firmware combined as they are laid out in memory.
 combined.txt is the disassembly with a small number of notes added from the reverse engineering process.
+
+No ownership is implied. Archived for research purposes. ROM contents: (C) Informer Computer Terminals
